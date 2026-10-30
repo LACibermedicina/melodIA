@@ -1,0 +1,12 @@
+{
+  "name": "melodia-orquestra",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MelodIA Orquestra com contas de usuário e banco de projetos (SQLite)",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.js",
+    "backup": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env backup.js",
+    "test": "node --disable-warning=ExperimentalWarning test/smoke.js"
+  }
+}
