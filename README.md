@@ -110,6 +110,17 @@ A faixa **Canto** agora canta a melodia da partitura com um motor humanizado, se
 - O balão repete as mensagens do app com expressão (alegre, pensativo, preocupado, comemorando). Clicar no mascote faz ele cantar uma frase com a voz e a interpretação atuais.
 - **Ícones animados** com volume e brilho (estilo animação 3D) nos passos, nas faixas e na barra de ações rápidas (Tocar, Gerar voz, Voz + banda, Direção vocal, Reorquestrar, Exportar). Tudo respeita a opção do sistema de reduzir movimento.
 
+## Aprender a tocar (passo 6)
+
+Transforma a música processada em material de estudo para o instrumento escolhido:
+
+- **Instrumentos (15):** piano, teclado/órgão, violão, guitarra, cavaquinho, ukulele, baixo elétrico, violino, violoncelo, flauta, clarinete em Si♭, sax alto em Mi♭, trompete em Si♭, voz e marimba. Cada um com a extensão real, a escrita transposta (clarinete, sax, trompete, violão/guitarra/baixo uma oitava acima), tablatura com dedilhado otimizado e diagramas de acordes para os instrumentos com trastes, dedilhado no piano, arcadas no arco e respirações no sopro e na voz.
+- **O que tocar:** melodia, canto (com letra), 2ª voz, baixo, harmonia, arpejo, ou **melodia + acompanhamento** (piano: mão esquerda no estilo; violão e cavaquinho: levada com acordes).
+- **Contexto da harmonia:** você escolhe as vozes que definem os acordes (baixo, harmonia, melodia, canto, 2ª voz, arpejo) e o ritmo harmônico. As cifras são analisadas por compasso ou meio compasso, com prioridade para o baixo, e enriquecidas conforme o estilo e o nível (7ª e 9ª no jazz e na bossa só quando a 9ª pertence ao tom, V7 nas cadências clássicas, add9 no cinematográfico). Instrumentos transpositores recebem as cifras já transpostas.
+- **Estudos:** arranjo da música; aquecimento (escala e arpejos de I, IV, V e I); **ornamentos** idiomáticos (trinado, mordente, grupeto e apojatura no clássico; envolvimento, scoop, fall e nota fantasma no jazz; bend, slide e ligados H/P no blues); **melismas** (diminuições em graus conjuntos no clássico, runs pentatônicos no gospel/pop, blue note no blues, escala bebop no jazz); **solo/improviso** (notas do acorde nos tempos fortes, notas-guia, motivo em pergunta e resposta); **acompanhamento** (baixo de Alberti, notas-guia, levada de bossa, arpejo p-i-m-a). Cada estudo traz "Como estudar" e "Base na literatura" (C. P. E. Bach, Quantz, Leopold Mozart, Ortiz, Caccini, García, Levine, Coker, Baker, Crook, Chediak).
+- **Prompt:** indicações livres ("solo de jazz de 8 compassos com notas-guia, avançado", "ornamentos barrocos nos compassos 1 a 8"), interpretadas pela IA quando disponível e sempre por uma leitura local; a IA pode acrescentar dicas de estudo.
+- **Prática:** toca o estudo com a banda completa, só com as vozes de contexto, só com metrônomo ou sozinho; andamento de 40% a 120%, trecho de compassos em repetição, contagem de um compasso e as notas acendendo na partitura. Exporta o MIDI do estudo ou adiciona o estudo como faixa do projeto.
+
 ## Canto natural no servidor (v6)
 
 A faixa **Canto** pode ser gerada no servidor com uma **voz neural de verdade**, que soa como canto humano compreensível e não como síntese de formantes:
