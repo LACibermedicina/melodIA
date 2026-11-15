@@ -15,7 +15,7 @@ name: Publicar na VPS
 on:
   push:
     branches: [main]
-    paths: ['server.js', 'backup.js', 'schema.sql', 'package.json', '.env.example', 'public/**', 'test/**', 'deploy/**', '.github/workflows/deploy.yml']
+    paths: ['canto/**', 'server.js', 'backup.js', 'schema.sql', 'package.json', '.env.example', 'public/**', 'test/**', 'deploy/**', '.github/workflows/deploy.yml']
   workflow_dispatch:
 
 concurrency:
@@ -41,6 +41,7 @@ jobs:
       - name: Conferir sintaxe
         run: |
           node --check server.js && node --check backup.js
+          python3 -m py_compile canto/svs.py canto/tts.py canto/gpu.py canto/servico.py
           bash -n deploy/vps-preparar.sh
       - name: Teste de fumaça (contas, projetos, radIA, segurança)
         run: npm test
@@ -81,9 +82,9 @@ jobs:
         run: |
           $SSH "$SUDO mkdir -p '$PASTA' && $SUDO chown -R \$(whoami) '$PASTA' && (command -v rsync >/dev/null || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq rsync))"
           rsync -az --stats \
-            --exclude '.env' --exclude 'data/' --exclude 'node_modules/' --exclude '.DS_Store' \
+            --exclude '.env' --exclude 'data/' --exclude '__pycache__/' --exclude 'canto/modelos/' --exclude 'node_modules/' --exclude '.DS_Store' \
             -e "ssh -i $HOME/.ssh/vps -p $PORTA_SSH" \
-            server.js backup.js schema.sql package.json .env.example public test deploy "$USUARIO@$HOST:$PASTA/" | tail -8
+            server.js backup.js schema.sql package.json .env.example public test deploy canto "$USUARIO@$HOST:$PASTA/" | tail -8
 
       - name: Enviar chaves (se o segredo MELODIA_ENV existir)
         env:

@@ -95,7 +95,7 @@ livre_a_partir(){ local p="$1"; while ocupada "$p"; do p=$((p+1)); done; echo "$
 
 if [ -n "$ENV_NOVO" ] && [ -f "$ENV_NOVO" ]; then
   PORTA_ATUAL="$(lerenv PORT)"
-  { grep -vE '^(PORT|HOST|DATA_DIR|TRUST_PROXY|COOKIE_SECURE)=' "$ENV_NOVO" | tr -d '\r'; [ -n "$PORTA_ATUAL" ] && echo "PORT=$PORTA_ATUAL" || true; } > "$ENVC.novo"
+  { grep -vE '^(PORT|HOST|DATA_DIR|TRUST_PROXY|COOKIE_SECURE|CANTO_PORT|CANTO_MODELS)=' "$ENV_NOVO" | tr -d '\r'; [ -n "$PORTA_ATUAL" ] && echo "PORT=$PORTA_ATUAL" || true; CP="$(lerenv CANTO_PORT)"; [ -n "$CP" ] && echo "CANTO_PORT=$CP" || true; } > "$ENVC.novo"
   mv "$ENVC.novo" "$ENVC"; rm -f "$ENV_NOVO"; ok "Chaves atualizadas a partir do segredo MELODIA_ENV"
 fi
 if [ -z "$(lerenv PORT)" ]; then
@@ -116,6 +116,50 @@ chown -R root:root "$APP_DIR"; chmod -R a+rX "$APP_DIR"
 chown "root:$APP_USER" "$ENVC"; chmod 640 "$ENVC"
 chown -R "$APP_USER:$APP_USER" "$DATA_DIR"; chmod 750 "$DATA_DIR"
 ok "Porta interna: $PORTA (somente 127.0.0.1) · banco em $DATA_DIR"
+
+# ---------- 2b) canto natural: Python isolado, voz neural Piper e vocoder WORLD ----------
+titulo "Canto natural (voz neural)"
+CANTO_VENV="/opt/melodia-canto/venv"; MODELOS="$DATA_DIR/canto-modelos"; CANTO_OK=0
+canto_instalar(){
+  command -v python3 >/dev/null 2>&1 || apt_instalar python3
+  command -v espeak-ng >/dev/null 2>&1 || apt_instalar espeak-ng || true
+  if [ ! -x "$CANTO_VENV/bin/python" ]; then
+    python3 -m venv "$CANTO_VENV" 2>/dev/null || { apt_instalar python3-venv python3-dev build-essential && python3 -m venv "$CANTO_VENV"; } || return 1
+  fi
+  HREQ="$(sha256sum "$APP_DIR/canto/requirements.txt" | cut -c1-16)$(grep -qE '^CANTO_GPU=hf' "$ENVC" && echo hf)"
+  if [ "$(cat "$CANTO_VENV/.req" 2>/dev/null)" != "$HREQ" ]; then
+    av "Instalando dependências do canto (1ª vez demora alguns minutos)…"
+    "$CANTO_VENV/bin/pip" install -q --upgrade pip wheel >/dev/null 2>&1 || true
+    if ! "$CANTO_VENV/bin/pip" install -q -r "$APP_DIR/canto/requirements.txt" 2>/tmp/melodia-pip.log; then
+      command -v g++ >/dev/null 2>&1 || apt_instalar python3-dev build-essential
+      "$CANTO_VENV/bin/pip" install -q -r "$APP_DIR/canto/requirements.txt" 2>/tmp/melodia-pip.log || { tail -15 /tmp/melodia-pip.log; return 1; }
+    fi
+    if grep -qE '^CANTO_GPU=hf' "$ENVC"; then "$CANTO_VENV/bin/pip" install -q "gradio_client>=1,<2" || av "gradio_client não instalou (GPU externa via Hugging Face indisponível)"; fi
+    echo "$HREQ" > "$CANTO_VENV/.req"
+  fi
+  mkdir -p "$MODELOS"
+  for f in pt_BR-faber-medium.onnx pt_BR-faber-medium.onnx.json; do
+    if [ ! -s "$MODELOS/$f" ]; then
+      av "Baixando a voz neural $f…"
+      curl -fsSL --retry 3 -o "$MODELOS/$f.part" "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/$f" && mv "$MODELOS/$f.part" "$MODELOS/$f" || return 1
+    fi
+  done
+  [ "$(stat -c %s "$MODELOS/pt_BR-faber-medium.onnx")" -gt 50000000 ] || { erro "Modelo de voz incompleto"; rm -f "$MODELOS/pt_BR-faber-medium.onnx"; return 1; }
+  chown -R "$APP_USER:$APP_USER" "$MODELOS" 2>/dev/null || true
+  [ -n "$(lerenv CANTO_PORT)" ] || gravar CANTO_PORT "$(livre_a_partir 3290)"
+  gravar CANTO_MODELS "$MODELOS"
+  sed -e "s#__DIR__#$APP_DIR#g" -e "s#__USER__#$APP_USER#g" -e "s#__VENV__#$CANTO_VENV#g" -e "s#__DATA__#$DATA_DIR#g" "$APP_DIR/deploy/melodia-canto.service" > /etc/systemd/system/melodia-canto.service
+  systemctl daemon-reload; systemctl enable melodia-canto >/dev/null 2>&1; systemctl restart melodia-canto
+  for i in $(seq 1 45); do curl -fsS --max-time 2 "http://127.0.0.1:$(lerenv CANTO_PORT)/status" >/dev/null 2>&1 && return 0; sleep 2; done
+  journalctl -u melodia-canto -n 25 --no-pager || true; return 1
+}
+if canto_instalar; then
+  CANTO_OK=1; ok "Canto natural ativo em 127.0.0.1:$(lerenv CANTO_PORT): $(curl -fsS "http://127.0.0.1:$(lerenv CANTO_PORT)/status")"
+else
+  av "Canto natural não ficou pronto: o app segue com a voz do navegador (veja os erros acima)."
+  sed -i '/^CANTO_PORT=/d' "$ENVC"; systemctl disable --now melodia-canto >/dev/null 2>&1 || true
+fi
+free -m | awk 'NR==2{print "RAM livre agora: "$7" MB"}'
 
 # ---------- 3) teste rápido e serviço ----------
 titulo "Serviço"
@@ -230,6 +274,13 @@ ST="$(curl -fsS --max-time 10 "http://127.0.0.1:$PORTA/api/status" || true)"
 if curl -fsS --max-time 15 "$URL/api/status" >/dev/null 2>&1; then ok "$URL no ar"
 elif curl -fsS --max-time 15 -H "Host: $DOMINIO" "http://127.0.0.1/api/status" >/dev/null 2>&1; then av "O proxy funciona, mas $URL ainda não abre de fora (DNS/HTTPS)."
 else av "$URL ainda não responde."; fi
+if [ "$CANTO_OK" = 1 ]; then
+  T0=$(date +%s%N); TD="$DATA_DIR/canto/autoteste"; mkdir -p "$TD" && chown -R "$APP_USER:$APP_USER" "$DATA_DIR/canto"
+  RT="$(curl -fsS --max-time 240 -H 'Content-Type: application/json' -d '{"lines":[{"id":"lead","notes":[{"t":0,"d":1,"m":62,"s":"can","wi":true},{"t":1,"d":1,"m":64,"s":"ta","wf":true},{"t":2,"d":2,"m":67,"s":"a","wi":true,"wf":true},{"t":4,"d":1,"m":65,"s":"vi","wi":true},{"t":5,"d":3,"m":64,"s":"da","wf":true}]}],"bpm":96,"vd":{"vib":0.5},"voice":{"f":1},"seed":1,"outdir":"'"$TD"'","base":"autoteste"}' "http://127.0.0.1:$(lerenv CANTO_PORT)/render" || true)"
+  if echo "$RT" | grep -q '"files"'; then ok "Autoteste do canto (\"canta a vida\") em $(( ($(date +%s%N)-T0)/1000000 )) ms: $RT"; else av "Autoteste do canto falhou: $RT"; journalctl -u melodia-canto -n 20 --no-pager || true; fi
+  rm -rf "$TD"
+  systemctl show melodia-canto -p MemoryCurrent | sed 's/MemoryCurrent=/Memória do canto: /'
+fi
 case "$ST" in *'"needsSetup":true'*) av "Ainda não há administrador: abra $URL AGORA e crie a conta de administrador (a 1ª conta criada vira admin)." ;; esac
 [ "$falhou" -eq 0 ] || exit 1
 ok "Pronto: $URL"

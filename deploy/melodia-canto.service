@@ -1,0 +1,26 @@
+[Unit]
+Description=MelodIA Orquestra - canto natural (voz neural + WORLD)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__/canto
+EnvironmentFile=__DIR__/.env
+Environment=OMP_NUM_THREADS=1 PYTHONUNBUFFERED=1
+ExecStart=__VENV__/bin/python __DIR__/canto/servico.py
+Restart=always
+RestartSec=5
+# A VPS é compartilhada: o canto cede CPU e tem teto de memória para nunca derrubar os outros apps.
+Nice=10
+CPUWeight=40
+MemoryHigh=600M
+MemoryMax=800M
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=__DATA__
+
+[Install]
+WantedBy=multi-user.target

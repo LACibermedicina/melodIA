@@ -165,6 +165,94 @@ async function createUser(b, role) {
 }
 const PID = /^[A-Za-z0-9_-]{6,64}$/;
 
+/* ---------- canto natural: fila para o serviço Python local (voz neural + WORLD) ---------- */
+const CANTO = { port: +env.CANTO_PORT || 0, dir: path.join(CFG.data, 'canto'), ver: 'c1' };
+for (const d of ['refs', 'out']) fs.mkdirSync(path.join(CANTO.dir, d), { recursive: true });
+const CJOBS = new Map(); let cantoChain = Promise.resolve();
+function cantoCall(method, p, body, ms) {
+  return new Promise((ok, ko) => {
+    if (!CANTO.port) return ko(bad(503, 'Canto natural não instalado neste servidor'));
+    const data = body ? Buffer.from(JSON.stringify(body)) : null;
+    const rq = http.request({ host: '127.0.0.1', port: CANTO.port, path: p, method, timeout: ms || 5000, headers: data ? { 'Content-Type': 'application/json', 'Content-Length': data.length } : {} }, r => {
+      const c = []; r.on('data', d => c.push(d)); r.on('end', () => { let j = {}; try { j = JSON.parse(Buffer.concat(c).toString('utf8')); } catch (e) { } r.statusCode < 300 ? ok(j) : ko(bad(502, j.error || 'Falha no serviço de canto')); });
+    });
+    rq.on('timeout', () => rq.destroy(bad(504, 'O serviço de canto demorou demais')));
+    rq.on('error', e => ko(e.http ? e : bad(503, 'Serviço de canto indisponível')));
+    if (data) rq.write(data); rq.end();
+  });
+}
+const refPath = (uid, vid) => path.join(CANTO.dir, 'refs', String(uid), vid + '.wav');
+function cleanNotes(a) {
+  if (!Array.isArray(a) || a.length > 4000) throw bad(400, 'Notas inválidas');
+  return a.map(n => ({ t: +n.t || 0, d: Math.max(0.01, Math.min(64, +n.d || 0)), m: Math.max(20, Math.min(100, Math.round(+n.m || 60))), s: String(n.s || '').slice(0, 12), wi: !!n.wi, wf: !!n.wf }));
+}
+function cantoPrune() {
+  try {
+    const dir = path.join(CANTO.dir, 'out'), fl = fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+    for (const x of fl.slice(1500)) { const b = x.f.slice(0, -5); for (const s of ['.json', '_lead.wav', '_harm.wav']) fs.rmSync(path.join(dir, b + s), { force: true }); }
+  } catch (e) { }
+}
+async function cantoApi(req, res, user, parts, m, body) {
+  const out = path.join(CANTO.dir, 'out');
+  if (parts[1] === 'status' && m === 'GET') {
+    try { const st = await cantoCall('GET', '/status', null, 3000); return send(res, 200, Object.assign({ available: true }, st)); }
+    catch (e) { return send(res, 200, { available: false, reason: e.message }); }
+  }
+  if (!user) throw bad(401, 'Sessão expirada. Entre novamente.');
+  if (parts[1] === 'ref' && PID.test(parts[2] || '')) {
+    const f = refPath(user.id, parts[2]);
+    if (m === 'DELETE') { fs.rmSync(f, { force: true }); return send(res, 200, { ok: true }); }
+    if (m === 'GET') return send(res, 200, { exists: fs.existsSync(f) });
+  }
+  if (parts[1] === 'jobs' && m === 'POST') {
+    if (!Array.isArray(body.lines) || !body.lines.length || body.lines.length > 2) throw bad(400, 'Linhas vocais inválidas');
+    const lines = body.lines.map(l => ({ id: l.id === 'harm' ? 'harm' : 'lead', notes: cleanNotes(l.notes), alpha: Math.max(.8, Math.min(1.25, +l.alpha || 1)) }));
+    if (!lines[0].notes.length) throw bad(400, 'Gere a voz na melodia antes do canto natural');
+    const vid = PID.test(String(body.ref || '')) ? String(body.ref) : '', rf = vid ? refPath(user.id, vid) : '';
+    const hasRef = !!(rf && fs.existsSync(rf));
+    const job = { lines, bpm: Math.max(30, Math.min(260, +body.bpm || 100)), vd: body.vd && typeof body.vd === 'object' ? body.vd : {}, voice: body.voice && typeof body.voice === 'object' ? body.voice : {},
+      seed: (+body.seed || 1) >>> 0, ar: Math.max(.5, Math.min(1, +body.ar || .9)), gpu: !!body.gpu && hasRef };
+    const sig = sha(JSON.stringify([CANTO.ver, job, hasRef ? fs.statSync(rf).mtimeMs : 0])).slice(0, 40);
+    const done = path.join(out, sig + '.json');
+    if (fs.existsSync(done)) return send(res, 200, { id: sig, status: 'done', result: JSON.parse(fs.readFileSync(done, 'utf8')) });
+    if (!CJOBS.has(sig)) {
+      const mine = [...CJOBS.values()].filter(j => j.uid === user.id && j.status !== 'done' && j.status !== 'error').length;
+      if (mine >= 2) throw bad(429, 'Você já tem cantos na fila. Aguarde terminarem.');
+      const rec = { uid: user.id, status: 'queued', created: Date.now() }; CJOBS.set(sig, rec);
+      cantoChain = cantoChain.then(async () => {
+        rec.status = 'running';
+        try {
+          const r = await cantoCall('POST', '/render', Object.assign({}, job, { ref: hasRef ? rf : null, outdir: out, base: sig, progress: path.join(out, sig + '.progress') }), 15 * 60000);
+          r.urls = {}; for (const k of Object.keys(r.files || {})) r.urls[k] = '/api/canto/audio/' + r.files[k];
+          fs.writeFileSync(done, JSON.stringify(r)); rec.status = 'done'; rec.result = r; audit(user.id, 'canto', sig + ' ' + r.ms + 'ms'); cantoPrune();
+        } catch (e) { rec.status = 'error'; rec.error = e.message; }
+        fs.rmSync(path.join(out, sig + '.progress'), { force: true });
+        setTimeout(() => CJOBS.delete(sig), 30 * 60000);
+      });
+    }
+    const rec = CJOBS.get(sig); return send(res, 200, { id: sig, status: rec.status, result: rec.result, error: rec.error });
+  }
+  if (parts[1] === 'jobs' && /^[a-f0-9]{40}$/.test(parts[2] || '') && m === 'GET') {
+    const sig = parts[2], rec = CJOBS.get(sig), done = path.join(out, sig + '.json');
+    if (!rec && fs.existsSync(done)) return send(res, 200, { id: sig, status: 'done', result: JSON.parse(fs.readFileSync(done, 'utf8')) });
+    if (!rec) throw bad(404, 'Trabalho de canto não encontrado');
+    let pr = null; try { pr = JSON.parse(fs.readFileSync(path.join(out, sig + '.progress'), 'utf8')); } catch (e) { }
+    const ahead = rec.status === 'queued' ? [...CJOBS.values()].filter(j => j.status === 'running' || (j.status === 'queued' && j.created < rec.created)).length : 0;
+    return send(res, 200, { id: sig, status: rec.status, progress: pr, ahead, result: rec.result, error: rec.error });
+  }
+  throw bad(404, 'Rota de canto não encontrada');
+}
+function cantoAudio(req, res, file) {
+  if (!/^[a-f0-9]{40}_(lead|harm)\.wav$/.test(file)) throw bad(404, 'Áudio não encontrado');
+  const f = path.join(CANTO.dir, 'out', file);
+  fs.stat(f, (err, st) => {
+    if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Não encontrado'); }
+    res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': st.size, 'Cache-Control': 'public, max-age=31536000, immutable' });
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(f).pipe(res);
+  });
+}
+
 /* ---------- API ---------- */
 async function api(req, res, u, p) {
   const m = req.method;
@@ -173,10 +261,21 @@ async function api(req, res, u, p) {
   if (o && m !== 'GET') { let h = ''; try { h = new URL(o).host; } catch (e) { } if (h !== req.headers.host) throw bad(403, 'Origem inválida'); }
   const parts = p.split('/').filter(Boolean).slice(1), a = parts[0], ip = clientIp(req);
   if (a === 'transcribe' && m === 'POST') { const tu = auth(req); if (!tu) throw bad(401, 'Sessão expirada. Entre novamente.'); return await transcribe(req, res, tu); }
+  if (a === 'canto' && parts[1] === 'audio' && (m === 'GET' || m === 'HEAD')) return cantoAudio(req, res, parts[2] || '');
+  if (a === 'canto' && parts[1] === 'ref' && m === 'POST') {
+    const cu = auth(req); if (!cu) throw bad(401, 'Sessão expirada. Entre novamente.');
+    if (!PID.test(parts[2] || '')) throw bad(400, 'Voz inválida');
+    limit('ref:' + cu.id, 30);
+    const b = await readRaw(req, 6 * 1048576);
+    if (b.length < 2000 || b.toString('ascii', 0, 4) !== 'RIFF' || b.toString('ascii', 8, 12) !== 'WAVE') throw bad(400, 'Envie a amostra da voz em WAV');
+    const f = refPath(cu.id, parts[2]); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, b);
+    return send(res, 200, { ok: true, bytes: b.length });
+  }
   const body = (m === 'POST' || m === 'PUT' || m === 'PATCH') ? await readBody(req) : {};
   if (a === 'ai' && m === 'POST') { const au = auth(req); if (!au) throw bad(401, 'Sessão expirada. Entre novamente.'); return await askAI(req, res, au, body); }
 
-  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: !!(CFG.ai.provider && CFG.ai.key) });
+  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: !!(CFG.ai.provider && CFG.ai.key), canto: !!CANTO.port });
+  if (a === 'canto') return await cantoApi(req, res, auth(req), parts, m, body);
 
   if (a === 'register' && m === 'POST') {
     const n = Q('SELECT COUNT(*) c FROM users').get().c;

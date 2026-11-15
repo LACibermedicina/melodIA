@@ -110,6 +110,20 @@ A faixa **Canto** agora canta a melodia da partitura com um motor humanizado, se
 - O balão repete as mensagens do app com expressão (alegre, pensativo, preocupado, comemorando). Clicar no mascote faz ele cantar uma frase com a voz e a interpretação atuais.
 - **Ícones animados** com volume e brilho (estilo animação 3D) nos passos, nas faixas e na barra de ações rápidas (Tocar, Gerar voz, Voz + banda, Direção vocal, Reorquestrar, Exportar). Tudo respeita a opção do sistema de reduzir movimento.
 
+## Canto natural no servidor (v6)
+
+A faixa **Canto** pode ser gerada no servidor com uma **voz neural de verdade**, que soa como canto humano compreensível e não como síntese de formantes:
+
+1. **Voz neural Piper** (`pt_BR-faber-medium`, licença MIT, ONNX, sem PyTorch) lê a letra e devolve a duração de cada fonema.
+2. Cada sílaba é separada em **consoante inicial, vogal e consoante final**. As consoantes mantêm o tempo natural e entram um pouco antes do tempo; a vogal é esticada até o fim da nota (melismas incluídos).
+3. O vocoder **WORLD** (`pyworld`) reafina tudo na partitura, com a direção vocal do passo 4: portamento, *scoop*, vibrato tardio, deriva natural, queda no fim das frases, dinâmica de frase, brilho, sopro, anel lírico, respirações entre frases e articulação (legato, staccato, marcato).
+4. **Timbre:** sem voz importada, usa a voz padrão ajustada ao registro (feminina, masculina ou infantil, pelos formantes). Com uma voz importada em *Vozes*, a amostra (até 25 s) é guardada no servidor e o canto é aproximado desse timbre (formantes + equalização espectral).
+5. **GPU externa opcional (Seed-VC):** com `CANTO_GPU=hf` (Space do Hugging Face, `HF_TOKEN` opcional) ou `CANTO_GPU=replicate` (`REPLICATE_API_TOKEN`, `CANTO_GPU_REPLICATE_VERSION`, `CANTO_GPU_REPLICATE_INPUT`) no segredo `MELODIA_ENV`, e o controle *Timbre na GPU externa* = 1, o canto já afinado é convertido para o timbre da amostra por conversão de canto *zero-shot*. Se a GPU falhar, fica a versão WORLD.
+
+No app: passo 4 → **🎙 Gerar canto natural** (é disparado sozinho depois de *Gerar voz na melodia*). O resultado fica em cache no servidor; se letra, notas, voz ou interpretação mudarem, o app avisa que está desatualizado e, até gerar de novo, a voz do navegador canta. A segunda voz também é cantada pela voz neural; dobras e coro de apoio continuam no navegador. O canto natural vai junto na exportação WAV e nas publicações da radIA.
+
+Na VPS, o deploy instala tudo sozinho: Python isolado em `/opt/melodia-canto/venv`, a voz em `/var/lib/melodia/canto-modelos` e o serviço `melodia-canto`, que só escuta em 127.0.0.1, roda com prioridade baixa e tem teto de 800 MB de memória para não afetar os outros apps. Se a instalação falhar, o site segue com a voz do navegador. O log de cada publicação traz um autoteste ("canta a vida") com o tempo de geração.
+
 ## Publicação automática na VPS (melodia.m3d.pro)
 
 Mesmo modelo do **appet** e do **revalida**: a cada push na `main`, o GitHub Actions roda os testes, copia o app para `/opt/melodia` na VPS e executa `deploy/vps-preparar.sh`.
