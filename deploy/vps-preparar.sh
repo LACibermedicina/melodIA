@@ -94,9 +94,10 @@ ocupada(){ ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"; }
 livre_a_partir(){ local p="$1"; while ocupada "$p"; do p=$((p+1)); done; echo "$p"; }
 
 if [ -n "$ENV_NOVO" ] && [ -f "$ENV_NOVO" ]; then
-  PORTA_ATUAL="$(lerenv PORT)"
-  { grep -vE '^(PORT|HOST|DATA_DIR|TRUST_PROXY|COOKIE_SECURE|CANTO_PORT|CANTO_MODELS)=' "$ENV_NOVO" | tr -d '\r'; [ -n "$PORTA_ATUAL" ] && echo "PORT=$PORTA_ATUAL" || true; CP="$(lerenv CANTO_PORT)"; [ -n "$CP" ] && echo "CANTO_PORT=$CP" || true; } > "$ENVC.novo"
-  mv "$ENVC.novo" "$ENVC"; rm -f "$ENV_NOVO"; ok "Chaves atualizadas a partir do segredo MELODIA_ENV"
+  # mescla: o segredo atualiza as chaves que traz; as demais (ex.: ativadas por deploy/ativar-ia.sh) continuam
+  grep -vE '^(PORT|HOST|DATA_DIR|TRUST_PROXY|COOKIE_SECURE|CANTO_PORT|CANTO_MODELS)=' "$ENV_NOVO" | tr -d '\r' > "$ENVC.sec"
+  touch "$ENVC"; { awk -F= 'NR==FNR{if($0~/^[A-Za-z_][A-Za-z0-9_]*=/)n[$1]=1;next} !($1 in n)' "$ENVC.sec" "$ENVC"; cat "$ENVC.sec"; } > "$ENVC.novo"
+  chmod 600 "$ENVC.novo"; mv "$ENVC.novo" "$ENVC"; rm -f "$ENV_NOVO" "$ENVC.sec"; ok "Chaves atualizadas a partir do segredo MELODIA_ENV"
 fi
 if [ -z "$(lerenv PORT)" ]; then
   if [ -n "$PORTA_PEDIDA" ]; then

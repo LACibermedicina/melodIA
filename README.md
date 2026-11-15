@@ -45,6 +45,12 @@ TRANSCRIBE_API_KEY=cole-aqui-a-chave-nova
 
 A chave fica só no servidor e nunca chega ao navegador. O áudio enviado é só o trecho escolhido, em WAV mono de 16 kHz (cerca de 2 MB por minuto), e o limite é de 30 pedidos por usuário a cada 15 minutos. Use uma chave nova: qualquer chave que já tenha sido colada em conversa ou arquivo deve ser considerada comprometida.
 
+## IA com failsafe (vários provedores)
+
+O servidor tenta os provedores na ordem de `AI_ORDER` (padrão `anthropic,gemini,openai,pollinations`). Se um falha, responde o próximo, e o que falhou fica 5 min no fim da fila. Variáveis: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_CURL_API_KEY`, `OPENAI_API_KEY`, `POLLINATIONS_API_KEY` (modelos opcionais: `ANTHROPIC_MODEL`, `GEMINI_MODEL`, `OPENAI_MODEL`, `POLLINATIONS_MODEL`).
+
+Para ativar na VPS, rode `sudo bash /opt/melodia/deploy/ativar-ia.sh`. O script pede as chaves sem mostrá-las, testa cada uma, grava só no `.env` da VPS e reinicia o app. O segredo `MELODIA_ENV` do deploy agora é mesclado ao `.env`, então não apaga essas chaves.
+
 ## Usuários e permissões
 
 - **Administrador**: cria, desativa, reativa, exclui usuários, redefine senhas, muda perfis, vê a lista de todos os projetos (e abre uma cópia na própria conta ou exclui) e consulta o registro de atividades. Tudo em **Conta → Administração**.

@@ -27,6 +27,45 @@ const CFG = {
     model: env.AI_MODEL || ''
   }
 };
+/* IA com failsafe: cada provedor configurado entra na fila (ordem em AI_ORDER); se um falha, o próximo responde */
+function aiChain() {
+  const L = [], seen = new Set(), add = (provider, key, url, model) => { key = String(key || '').trim(); if (!key || seen.has(provider + key)) return; seen.add(provider + key); L.push({ provider, key, url: url || '', model: model || '' }); };
+  const order = String(env.AI_ORDER || 'anthropic,gemini,openai,pollinations').split(',').map(x => x.trim()).filter(Boolean);
+  if (CFG.ai.provider && CFG.ai.key) add(CFG.ai.provider, CFG.ai.key, CFG.ai.url, CFG.ai.model);
+  for (const p of order) {
+    if (p === 'anthropic') add('anthropic', env.ANTHROPIC_API_KEY, '', env.ANTHROPIC_MODEL);
+    if (p === 'openai') add('openai', env.OPENAI_API_KEY, env.OPENAI_URL, env.OPENAI_MODEL);
+    if (p === 'gemini') for (const k of [env.GEMINI_API_KEY, env.GOOGLE_API_KEY, env.GEMINI_CURL_API_KEY]) add('gemini', k, '', env.GEMINI_MODEL);
+    if (p === 'pollinations') add('openai', env.POLLINATIONS_API_KEY, 'https://gen.pollinations.ai/v1/chat/completions', env.POLLINATIONS_MODEL || 'openai');
+  }
+  return L;
+}
+const AI_LIST = aiChain(), AI_BAD = new Map();
+async function aiOne(A, system, prompt, max) {
+  let url, headers, payload;
+  if (A.provider === 'anthropic') {
+    url = A.url || 'https://api.anthropic.com/v1/messages';
+    headers = { 'x-api-key': A.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+    payload = { model: A.model || 'claude-haiku-5-5', max_tokens: max, system: system || undefined, messages: [{ role: 'user', content: prompt }] };
+  } else if (A.provider === 'gemini') {
+    url = A.url || 'https://generativelanguage.googleapis.com/v1beta/models/' + (A.model || 'gemini-flash-latest') + ':generateContent';
+    headers = { 'x-goog-api-key': A.key, 'content-type': 'application/json' };
+    payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { maxOutputTokens: max, thinkingConfig: { thinkingBudget: 0 } } };
+    if (system) payload.systemInstruction = { parts: [{ text: system }] };
+  } else {
+    url = A.url || 'https://api.openai.com/v1/chat/completions';
+    headers = { Authorization: 'Bearer ' + A.key, 'content-type': 'application/json' };
+    payload = { model: A.model || 'gpt-4o-mini', max_tokens: max, messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: prompt }] };
+  }
+  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(90000) });
+  let j = null; try { j = await r.json(); } catch (e) { }
+  if (!r.ok) throw new Error(A.provider + ' ' + r.status);
+  const text = A.provider === 'anthropic' ? ((j && j.content || []).map(c => c.text || '').join(''))
+    : A.provider === 'gemini' ? ((j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || '').join('')
+    : (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+  if (!String(text).trim()) throw new Error(A.provider + ' sem texto');
+  return String(text).trim();
+}
 const PUB = path.join(__dirname, 'public');
 fs.mkdirSync(CFG.data, { recursive: true });
 const db = new DatabaseSync(path.join(CFG.data, 'melodia.db'));
@@ -82,27 +121,17 @@ async function transcribe(req, res, user) {
 }
 
 async function askAI(req, res, user, body) {
-  const A = CFG.ai;
-  if (!A.provider || !A.key) throw bad(501, 'A IA no servidor não está configurada');
+  if (!AI_LIST.length) throw bad(501, 'A IA no servidor não está configurada');
   limit('ai|' + user.id, 60);
   const prompt = String(body.prompt || '').slice(0, 12000); if (!prompt) throw bad(400, 'Escreva o pedido para a IA');
   const system = String(body.system || '').slice(0, 4000), max = Math.min(+body.max_tokens || 1500, 4000);
-  let url, headers, payload;
-  if (A.provider === 'anthropic') {
-    url = A.url || 'https://api.anthropic.com/v1/messages';
-    headers = { 'x-api-key': A.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
-    payload = { model: A.model || 'claude-haiku-5-5', max_tokens: max, system: system || undefined, messages: [{ role: 'user', content: prompt }] };
-  } else {
-    url = A.url || 'https://api.openai.com/v1/chat/completions';
-    headers = { Authorization: 'Bearer ' + A.key, 'content-type': 'application/json' };
-    payload = { model: A.model || 'gpt-4o-mini', max_tokens: max, messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: prompt }] };
+  /* provedores que falharam há menos de 5 min vão para o fim da fila */
+  const now = Date.now(), fila = AI_LIST.filter(A => !(AI_BAD.get(A) > now)).concat(AI_LIST.filter(A => AI_BAD.get(A) > now)), erros = [];
+  for (const A of fila) {
+    try { const text = await aiOne(A, system, prompt, max); AI_BAD.delete(A); return send(res, 200, { text, provider: A.provider }); }
+    catch (e) { erros.push(e.message); AI_BAD.set(A, now + 5 * 60000); console.error('ia: falhou', e.message); }
   }
-  let r, j = null;
-  try { r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(90000) }); try { j = await r.json(); } catch (e) { } }
-  catch (e) { console.error('ia:', e.message); throw bad(502, 'Não foi possível falar com o provedor de IA'); }
-  if (!r.ok) { console.error('ia: provedor respondeu', r.status); throw bad(502, 'O provedor de IA recusou o pedido (' + r.status + ')'); }
-  const text = A.provider === 'anthropic' ? ((j && j.content || []).map(c => c.text || '').join('')) : (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
-  return send(res, 200, { text: String(text).trim() });
+  throw bad(502, 'Nenhum provedor de IA respondeu (' + erros.join('; ') + ')');
 }
 const rad = d => d * Math.PI / 180;
 function km(a, b, c, d) { const x = rad(c - a), y = rad(d - b), h = Math.sin(x / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(y / 2) ** 2; return 12742 * Math.asin(Math.sqrt(h)); }
@@ -300,7 +329,7 @@ async function api(req, res, u, p) {
   const body = (m === 'POST' || m === 'PUT' || m === 'PATCH') ? await readBody(req) : {};
   if (a === 'ai' && m === 'POST') { const au = auth(req); if (!au) throw bad(401, 'Sessão expirada. Entre novamente.'); return await askAI(req, res, au, body); }
 
-  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: !!(CFG.ai.provider && CFG.ai.key), canto: !!CANTO.port });
+  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: AI_LIST.length > 0, aiProviders: AI_LIST.map(A => A.url.includes('pollinations') ? 'pollinations' : A.provider), canto: !!CANTO.port });
   if (a === 'canto') return await cantoApi(req, res, auth(req), parts, m, body);
 
   if (a === 'register' && m === 'POST') {
