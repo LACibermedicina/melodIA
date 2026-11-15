@@ -38,3 +38,23 @@ CREATE TABLE IF NOT EXISTS audit (
   action  TEXT NOT NULL,
   detail  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS userdata (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  k          TEXT NOT NULL,
+  v          TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, k)
+);
+
+CREATE TABLE IF NOT EXISTS posts (
+  id         TEXT PRIMARY KEY,
+  owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT NOT NULL,
+  descr      TEXT,
+  lat        REAL NOT NULL,
+  lon        REAL NOT NULL,
+  data       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_posts_geo ON posts(lat, lon);
