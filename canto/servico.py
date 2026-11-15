@@ -73,9 +73,11 @@ def job(b):
             except Exception as e:
                 gpu_err = str(e)[:200]
     progress(1, 'Pronto')
+    st = dict(svs.STATS)
     STATE['done'] += 1
     return {'files': files, 'start': start, 'fs': fs, 'ms': int((time.time() - t0) * 1000), 'engine': TTS.name,
-            'alignments': bool(getattr(TTS, 'alignments', False)), 'timbre': note, 'gpu': gpu_used, 'gpuError': gpu_err}
+            'alignments': bool(getattr(TTS, 'alignments', False)), 'timbre': note, 'gpu': gpu_used, 'gpuError': gpu_err,
+            'palavras': {'alinhadas': st['al'], 'silaba_a_silaba': st['fb'], 'exemplos': st['fbw'][-6:]}}
 
 class H(BaseHTTPRequestHandler):
     def _send(self, code, obj):

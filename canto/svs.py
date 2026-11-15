@@ -414,6 +414,7 @@ def render_line(pw, tts, notes, bpm, vd, v, seed, timbre=None, progress=None, fs
 
 # ---------------------------------------------------------------- fala das palavras com cache
 _CACHE = {}
+STATS = {'al': 0, 'fb': 0, 'fbw': []}
 def _cache_put(k, v):
     _CACHE[k] = v
     if len(_CACHE) > 400:
@@ -440,9 +441,12 @@ def _speak_word(pw, tts, sylls):
         ph = [p for p in merge_phones(al) if p[0] != ' ']
         sy = ipa_word_syllables(ph)
         if len(sy) == len(sylls):
+            STATS['al'] += 1
             f0, sp, ap = analyze(pw, x, fs)
             return [_mk(f0, sp, ap, int(a / hop), int(b / hop), int(math.ceil(c / hop)), int(math.ceil(d / hop))) for a, b, c, d in sy]
     # sem alinhamento (ou contagem diferente): fala sílaba por sílaba e acha a vogal pela energia
+    STATS['fb'] += 1
+    if len(STATS['fbw']) < 12: STATS['fbw'].append('%s:%s' % ('-'.join(sylls), ''.join(p[0] for p in merge_phones(al or []) if p[0] != ' ') if al else 'sem fonemas'))
     res = []
     for s in sylls:
         xs, _ = tts.speak(s)
