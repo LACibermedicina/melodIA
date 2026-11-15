@@ -292,8 +292,8 @@ if [ "$CANTO_OK" = 1 ]; then
   if [ -n "$TW" ]; then
     T0=$(date +%s%N)
     RT2="$(curl -fsS --max-time 600 -H 'Content-Type: application/json' -d '{"wav":"'"$TW"'","asr":true}' "http://127.0.0.1:$(lerenv CANTO_PORT)/transcrever" || true)"
-    N2="$(echo "$RT2" | grep -o '"t":' | wc -l)"; W2="$(echo "$RT2" | grep -o '"w": *"[^"]*"' | sed 's/"w": *//' | tr -d '"' | tr '\n' ' ')"
-    if [ "$N2" -ge 5 ]; then ok "Autoteste da transcrição em $(( ($(date +%s%N)-T0)/1000000 )) ms: $N2 notas · letra: ${W2:-(sem letra)} $(echo "$RT2" | grep -o '"asrError": *"[^"]*"')"
+    N2="$(echo "$RT2" | grep -o '"t":' | wc -l || true)"; W2="$(echo "$RT2" | grep -o '"w": *"[^"]*"' | sed 's/"w": *//' | tr -d '"' | tr '\n' ' ' || true)"; E2="$(echo "$RT2" | grep -o '"asrError": *"[^"]*"' || true)"
+    if [ "$N2" -ge 5 ]; then ok "Autoteste da transcrição em $(( ($(date +%s%N)-T0)/1000000 )) ms: $N2 notas · letra: ${W2:-(sem letra)} $E2"
     else av "Autoteste da transcrição falhou: $(echo "$RT2" | head -c 400)"; fi
   fi
   rm -rf "$TD"
