@@ -61,12 +61,21 @@ jobs:
           fi
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$KEY" | tr -d '\r' > ~/.ssh/vps && chmod 600 ~/.ssh/vps
+          if ! PUBK="$(ssh-keygen -y -f ~/.ssh/vps 2>/dev/null)"; then
+            echo "::error::O segredo VPS_SSH_KEY não é uma chave PRIVADA válida (ou tem senha). Cole o arquivo SEM .pub, da linha BEGIN até END."; exit 1
+          fi
+          echo "Chave pública que a VPS precisa ter em /root/.ssh/authorized_keys:"
+          echo "PUBLICA: $PUBK"
+          echo "Impressão digital: $(ssh-keygen -lf ~/.ssh/vps | awk '{print $2}')"
           ssh-keyscan -p "$PORTA_SSH" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          echo "SSH=ssh -i $HOME/.ssh/vps -p $PORTA_SSH -o ServerAliveInterval=30 $USUARIO@$HOST" >> "$GITHUB_ENV"
+          echo "SSH=ssh -i $HOME/.ssh/vps -p $PORTA_SSH -o BatchMode=yes -o IdentitiesOnly=yes -o ServerAliveInterval=30 $USUARIO@$HOST" >> "$GITHUB_ENV"
           echo "SUDO=$([ "$USUARIO" = root ] && echo '' || echo 'sudo -n')" >> "$GITHUB_ENV"
 
       - name: Testar acesso
-        run: $SSH "echo conectado em \$(hostname) como \$(whoami)"
+        run: |
+          if ! $SSH "echo conectado em \$(hostname) como \$(whoami)"; then
+            echo "::error::A VPS recusou a chave. Adicione a linha PUBLICA mostrada no passo anterior em /root/.ssh/authorized_keys (console da DigitalOcean) e rode de novo."; exit 1
+          fi
 
       - name: Copiar o app para a VPS
         run: |
