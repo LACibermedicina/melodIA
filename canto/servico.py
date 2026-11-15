@@ -83,6 +83,7 @@ def job_tr(b):
     """Transcrição de voz cantada: notas + ornamentos + efeitos + letra alinhada no tempo."""
     t0 = time.time(); prog = b.get('progress')
     def progress(f, msg):
+        print('transcrever %.0f%% %.1fs · %s' % (f * 100, time.time() - t0, msg), flush=True)
         if prog:
             try:
                 with open(prog + '.tmp', 'w', encoding='utf-8') as fh: json.dump({'p': round(float(f), 3), 'msg': msg}, fh)
