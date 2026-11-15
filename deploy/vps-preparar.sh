@@ -154,6 +154,7 @@ canto_instalar(){
       touch "$MODELOS/whisper/.ok-$ASR"; ok "Whisper $ASR pronto"
     else av "Whisper não baixou (a letra cantada não será reconhecida no servidor): $(tail -2 /tmp/melodia-whisper.log)"; fi
   fi
+  mkdir -p "$MODELOS/hf" "$MODELOS/cache"
   chown -R "$APP_USER:$APP_USER" "$MODELOS" 2>/dev/null || true
   [ -n "$(lerenv CANTO_PORT)" ] || gravar CANTO_PORT "$(livre_a_partir 3290)"
   gravar CANTO_MODELS "$MODELOS"
