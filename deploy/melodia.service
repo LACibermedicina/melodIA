@@ -1,0 +1,20 @@
+[Unit]
+Description=MelodIA Orquestra (Node.js)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=__DIR__/.env
+ExecStart=__NODE__ --disable-warning=ExperimentalWarning server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=__DATA__
+
+[Install]
+WantedBy=multi-user.target

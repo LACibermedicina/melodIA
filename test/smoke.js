@@ -1,6 +1,7 @@
 'use strict';
 // Sobe o servidor num banco temporário e testa os fluxos principais. Uso: npm test
 const { spawn } = require('node:child_process'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const http = require('node:http');
 const PORT = 3900 + Math.floor(Math.random() * 90), BASE = 'http://127.0.0.1:' + PORT;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'melodia-'));
 let fails = 0;
@@ -10,7 +11,7 @@ class Client {
   constructor() { this.ck = ''; }
   async call(method, url, body, hdr) {
     const r = await fetch(BASE + url, { method, headers: Object.assign({ 'Content-Type': 'application/json', 'X-Requested-With': 'melodia', Cookie: this.ck }, hdr || {}), body: body ? JSON.stringify(body) : undefined });
-    const sc = r.headers.get('set-cookie'); if (sc) this.ck = sc.split(';')[0].replace(/^mo_sid=$/, '');
+    const sc = r.headers.get('set-cookie'); if (sc) { this.ck = sc.split(';')[0]; this.ck_full = this.ck; }
     let j = null; try { j = await r.json(); } catch (e) { }
     return { s: r.status, j };
   }
@@ -18,7 +19,13 @@ class Client {
 const proj = n => ({ name: n, data: { tracks: [{ id: 'mel', notes: [] }], bpm: 100 } });
 
 (async () => {
-  const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR: tmp }, stdio: ['ignore', 'pipe', 'inherit'] });
+  let seen = null;
+  const mock = http.createServer((q, r) => { const c = []; q.on('data', d => c.push(d)); q.on('end', () => { seen = { auth: q.headers.authorization, ct: q.headers['content-type'], body: Buffer.concat(c).toString('latin1') }; r.setHeader('Content-Type', 'application/json'); r.end(JSON.stringify({ text: 'letra de teste da música' })); }); });
+  let aiSeen = null;
+  const mockAi = http.createServer((q, r) => { const c = []; q.on('data', d => c.push(d)); q.on('end', () => { aiSeen = { key: q.headers['x-api-key'], body: JSON.parse(Buffer.concat(c).toString()) }; r.setHeader('Content-Type', 'application/json'); r.end(JSON.stringify({ content: [{ type: 'text', text: '{"style":"jazz"}' }] })); }); });
+  await new Promise(r => mockAi.listen(0, '127.0.0.1', r));
+  await new Promise(r => mock.listen(0, '127.0.0.1', r));
+  const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR: tmp, TRANSCRIBE_API_KEY: 'chave-de-teste', ANTHROPIC_API_KEY: 'chave-ia-teste', AI_URL: 'http://127.0.0.1:' + mockAi.address().port + '/v1/messages', TRANSCRIBE_URL: 'http://127.0.0.1:' + mock.address().port + '/v1/audio/transcriptions' }, stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => srv.stdout.on('data', d => /ouvindo/.test(String(d)) && r()));
   try {
     const adm = new Client(), bob = new Client(), anon = new Client();
@@ -50,11 +57,36 @@ const proj = n => ({ name: n, data: { tracks: [{ id: 'mel', notes: [] }], bpm: 1
     r = await adm.call('POST', '/api/me/password', { current: 'senha-forte-1', next: 'nova-senha-123' }); ok(r.s === 200, 'troca a própria senha');
     r = await adm.call('GET', '/api/admin/audit'); ok(r.j.events.length > 5, 'registro de atividades preenchido');
     r = await adm.call('DELETE', '/api/projects/proj-ana-001'); ok(r.s === 200, 'exclui projeto');
+    r = await anon.call('GET', '/api/status'); ok(r.j.transcribe === true, 'status informa que a transcrição no servidor está ativa');
+    const wavLike = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(2000, 1)]);
+    let tr = await fetch(BASE + '/api/transcribe', { method: 'POST', headers: { 'X-Requested-With': 'melodia', 'Content-Type': 'audio/wav' }, body: wavLike }); ok(tr.status === 401, 'transcrição exige login');
+    const stray = new Client(); r = await stray.call('POST', '/api/login', { email: 'ana@exemplo.com', password: 'nova-senha-123' }); ok(r.s === 200, 'login com a senha nova');
+    tr = await fetch(BASE + '/api/transcribe', { method: 'POST', headers: { 'X-Requested-With': 'melodia', 'Content-Type': 'audio/wav', Cookie: stray.ck_full }, body: wavLike });
+    const tj = await tr.json(); ok(tr.status === 200 && tj.text === 'letra de teste da música', 'transcrição passa pelo servidor e devolve o texto');
+    ok(seen && seen.auth === 'Bearer chave-de-teste' && /name="model"/.test(seen.body) && /name="language"/.test(seen.body) && /multipart\/form-data; boundary=/.test(seen.ct), 'a chave fica só no servidor e o pedido ao provedor é multipart correto');
+    tr = await fetch(BASE + '/api/transcribe', { method: 'POST', headers: { 'X-Requested-With': 'melodia', 'Content-Type': 'audio/wav', Cookie: stray.ck_full }, body: Buffer.from('nao e wav') }); ok(tr.status === 400, 'rejeita arquivo que não é WAV');
+    r = await stray.call('POST', '/api/me/logout-all'); r = await stray.call('GET', '/api/me'); ok(r.s === 401, 'sair de todos os dispositivos encerra as sessões');
+    r = await stray.call('POST', '/api/login', { email: 'ana@exemplo.com', password: 'nova-senha-123' });
+    r = await stray.call('PUT', '/api/userdata/voices', { value: { list: [{ id: 'v1', name: 'Minha voz' }], def: 'v1' } }); ok(r.s === 200, 'salva dados do usuário (vozes)');
+    r = await stray.call('GET', '/api/userdata/voices'); ok(r.j.value && r.j.value.def === 'v1', 'lê dados do usuário');
+    r = await bob.call('GET', '/api/userdata/voices'); ok(r.s === 401, 'dados do usuário exigem login');
+    r = await stray.call('PUT', '/api/userdata/CHAVE RUIM', { value: 1 }); ok(r.s === 400 || r.s === 404, 'rejeita chave inválida');
+    r = await stray.call('POST', '/api/ai', { prompt: 'monte um arranjo de jazz', system: 'responda em JSON' }); ok(r.s === 200 && r.j.text === '{"style":"jazz"}', 'proxy de IA devolve o texto do provedor');
+    ok(aiSeen && aiSeen.key === 'chave-ia-teste' && aiSeen.body.messages[0].content === 'monte um arranjo de jazz', 'a chave de IA fica só no servidor');
+    r = await anon.call('POST', '/api/ai', { prompt: 'oi' }); ok(r.s === 401, 'IA exige login');
+    r = await stray.call('POST', '/api/radia', { title: 'Aurora', desc: 'teste', lat: -23.5, lon: -46.6, data: { tracks: [{ notes: [] }], bpm: 100, cover: 'data:image/jpeg;base64,AAA' } }); ok(r.s === 201, 'publica na radIA');
+    const rid = r.j.id;
+    r = await stray.call('POST', '/api/radia', { title: 'Longe', desc: '', lat: 35.7, lon: 139.7, data: { tracks: [{ notes: [] }] } });
+    r = await stray.call('GET', '/api/radia?lat=-22.9&lon=-43.2'); ok(r.j.posts.length === 2 && r.j.posts[0].title === 'Aurora' && r.j.posts[0].dist_km < r.j.posts[1].dist_km && r.j.posts[0].mine === true, 'radIA lista por proximidade da antena');
+    r = await stray.call('POST', '/api/radia', { title: 'x', lat: 120, lon: 0, data: { tracks: [] } }); ok(r.s === 400, 'rejeita posição inválida');
+    r = await stray.call('GET', '/api/radia/' + rid); ok(r.s === 200 && r.j.post.data.tracks.length === 1, 'abre uma publicação');
+    const other = new Client(); await other.call('POST', '/api/login', { email: 'ana@exemplo.com', password: 'nova-senha-123' });
+    r = await stray.call('DELETE', '/api/radia/' + rid); ok(r.s === 200, 'dono exclui a própria publicação');
     r = await adm.call('POST', '/api/logout'); r = await adm.call('GET', '/api/me'); ok(r.s === 401, 'logout encerra a sessão');
     const h = await fetch(BASE + '/'); ok(h.status === 200 || h.status === 404, 'servidor entrega arquivos estáticos');
     const t = await fetch(BASE + '/..%2f..%2fserver.js'); ok(t.status !== 200, 'bloqueia acesso fora da pasta pública');
   } catch (e) { console.error(e); fails++; }
-  srv.kill(); fs.rmSync(tmp, { recursive: true, force: true });
+  srv.kill(); mock.close(); mockAi.close(); fs.rmSync(tmp, { recursive: true, force: true });
   console.log(fails ? `\n${fails} falha(s)` : '\nTodos os testes passaram');
   process.exit(fails ? 1 : 0);
 })();

@@ -13,7 +13,19 @@ const CFG = {
   days: +env.SESSION_DAYS || 7,
   signup: env.ALLOW_SIGNUP === 'true',
   secure: env.COOKIE_SECURE === 'true',
-  maxBody: (+env.MAX_BODY_MB || 10) * 1048576
+  maxBody: (+env.MAX_BODY_MB || 10) * 1048576,
+  tr: {
+    key: env.TRANSCRIBE_API_KEY || env.OPENAI_API_KEY || '',
+    url: env.TRANSCRIBE_URL || 'https://api.openai.com/v1/audio/transcriptions',
+    model: env.TRANSCRIBE_MODEL || 'whisper-1',
+    max: (+env.TRANSCRIBE_MAX_MB || 25) * 1048576
+  },
+  ai: {
+    provider: env.AI_PROVIDER || (env.AI_API_KEY || env.ANTHROPIC_API_KEY ? 'anthropic' : env.OPENAI_API_KEY ? 'openai' : ''),
+    key: env.AI_API_KEY || env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || '',
+    url: env.AI_URL || '',
+    model: env.AI_MODEL || ''
+  }
 };
 const PUB = path.join(__dirname, 'public');
 fs.mkdirSync(CFG.data, { recursive: true });
@@ -42,6 +54,60 @@ function readBody(req) {
     req.on('error', ko);
   });
 }
+function readRaw(req, max) {
+  return new Promise((ok, ko) => {
+    let n = 0, dead = false; const c = [];
+    req.on('data', d => { if (dead) return; n += d.length; if (n > max) { dead = true; ko(bad(413, 'Áudio grande demais para transcrever')); return; } c.push(d); });
+    req.on('end', () => { if (!dead) ok(Buffer.concat(c)); });
+    req.on('error', ko);
+  });
+}
+async function transcribe(req, res, user) {
+  if (!CFG.tr.key) throw bad(501, 'A transcrição no servidor não está configurada');
+  limit('tr|' + user.id, 30);
+  const wav = await readRaw(req, CFG.tr.max);
+  if (wav.length < 1000 || wav.toString('latin1', 0, 4) !== 'RIFF') throw bad(400, 'Envie um arquivo WAV válido');
+  const bd = '----melodia' + crypto.randomBytes(12).toString('hex'), parts = [];
+  const field = (n, v) => parts.push(Buffer.from(`--${bd}\r\nContent-Disposition: form-data; name="${n}"\r\n\r\n${v}\r\n`));
+  field('model', CFG.tr.model); field('language', 'pt'); field('response_format', 'json');
+  parts.push(Buffer.from(`--${bd}\r\nContent-Disposition: form-data; name="file"; filename="audio.wav"\r\nContent-Type: audio/wav\r\n\r\n`), wav, Buffer.from(`\r\n--${bd}--\r\n`));
+  let r, j = null;
+  try {
+    r = await fetch(CFG.tr.url, { method: 'POST', headers: { Authorization: 'Bearer ' + CFG.tr.key, 'Content-Type': 'multipart/form-data; boundary=' + bd }, body: Buffer.concat(parts), signal: AbortSignal.timeout(180000) });
+    try { j = await r.json(); } catch (e) { }
+  } catch (e) { console.error('transcrição:', e.message); throw bad(502, 'Não foi possível falar com o provedor de transcrição'); }
+  if (!r.ok) { console.error('transcrição: provedor respondeu', r.status); throw bad(502, 'O provedor recusou a transcrição (' + r.status + ')'); }
+  audit(user.id, 'transcribe', Math.round(wav.length / 1024) + ' KB');
+  return send(res, 200, { text: String((j && j.text) || '').trim() });
+}
+
+async function askAI(req, res, user, body) {
+  const A = CFG.ai;
+  if (!A.provider || !A.key) throw bad(501, 'A IA no servidor não está configurada');
+  limit('ai|' + user.id, 60);
+  const prompt = String(body.prompt || '').slice(0, 12000); if (!prompt) throw bad(400, 'Escreva o pedido para a IA');
+  const system = String(body.system || '').slice(0, 4000), max = Math.min(+body.max_tokens || 1500, 4000);
+  let url, headers, payload;
+  if (A.provider === 'anthropic') {
+    url = A.url || 'https://api.anthropic.com/v1/messages';
+    headers = { 'x-api-key': A.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' };
+    payload = { model: A.model || 'claude-haiku-5-5', max_tokens: max, system: system || undefined, messages: [{ role: 'user', content: prompt }] };
+  } else {
+    url = A.url || 'https://api.openai.com/v1/chat/completions';
+    headers = { Authorization: 'Bearer ' + A.key, 'content-type': 'application/json' };
+    payload = { model: A.model || 'gpt-4o-mini', max_tokens: max, messages: [...(system ? [{ role: 'system', content: system }] : []), { role: 'user', content: prompt }] };
+  }
+  let r, j = null;
+  try { r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(90000) }); try { j = await r.json(); } catch (e) { } }
+  catch (e) { console.error('ia:', e.message); throw bad(502, 'Não foi possível falar com o provedor de IA'); }
+  if (!r.ok) { console.error('ia: provedor respondeu', r.status); throw bad(502, 'O provedor de IA recusou o pedido (' + r.status + ')'); }
+  const text = A.provider === 'anthropic' ? ((j && j.content || []).map(c => c.text || '').join('')) : (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+  return send(res, 200, { text: String(text).trim() });
+}
+const rad = d => d * Math.PI / 180;
+function km(a, b, c, d) { const x = rad(c - a), y = rad(d - b), h = Math.sin(x / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(y / 2) ** 2; return 12742 * Math.asin(Math.sqrt(h)); }
+const KEY = /^[a-z0-9_.-]{1,40}$/;
+
 function cookie(req, name) {
   for (const p of (req.headers.cookie || '').split(';')) {
     const i = p.indexOf('=');
@@ -51,6 +117,11 @@ function cookie(req, name) {
 }
 const audit = (uid, action, detail) => Q('INSERT INTO audit(user_id,action,detail) VALUES(?,?,?)').run(uid ?? null, action, detail ? String(detail).slice(0, 300) : null);
 
+/* IP real do visitante: atrás do proxy reverso (TRUST_PROXY=true) vem do cabeçalho X-Real-IP que o nginx grava */
+function clientIp(req) {
+  if (env.TRUST_PROXY === 'true') { const h = String(req.headers['x-real-ip'] || req.headers['x-forwarded-for'] || '').split(',')[0].trim(); if (h) return h; }
+  return req.socket.remoteAddress;
+}
 /* ---------- senhas, sessões e limite de tentativas ---------- */
 async function hashPw(pw) {
   const salt = crypto.randomBytes(16), key = await scrypt(pw, salt, 64);
@@ -70,13 +141,13 @@ function startSession(res, userId, ip) {
 }
 function auth(req) {
   const t = cookie(req, 'mo_sid'); if (!t) return null;
-  const r = Q('SELECT u.id,u.name,u.email,u.role,u.active,s.token_hash th,s.expires_at ex FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?').get(sha(t));
+  const r = Q('SELECT u.id,u.name,u.email,u.role,u.active,s.token_hash th,s.expires_at ex,u.last_login FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?').get(sha(t));
   return r && r.active && r.ex > Date.now() ? r : null;
 }
 const tries = new Map();
-function limit(key) {
+function limit(key, max = 8) {
   const now = Date.now(), a = (tries.get(key) || []).filter(t => now - t < 15 * 60e3);
-  if (a.length >= 8) throw bad(429, 'Muitas tentativas. Aguarde alguns minutos.');
+  if (a.length >= max) throw bad(429, 'Muitas tentativas. Aguarde alguns minutos.');
   a.push(now); tries.set(key, a);
 }
 setInterval(() => { Q('DELETE FROM sessions WHERE expires_at<?').run(Date.now()); tries.clear(); }, 3600e3).unref();
@@ -100,10 +171,12 @@ async function api(req, res, u, p) {
   if (m !== 'GET' && req.headers['x-requested-with'] !== 'melodia') throw bad(403, 'Requisição não autorizada');
   const o = req.headers.origin;
   if (o && m !== 'GET') { let h = ''; try { h = new URL(o).host; } catch (e) { } if (h !== req.headers.host) throw bad(403, 'Origem inválida'); }
-  const parts = p.split('/').filter(Boolean).slice(1), a = parts[0], ip = req.socket.remoteAddress;
+  const parts = p.split('/').filter(Boolean).slice(1), a = parts[0], ip = clientIp(req);
+  if (a === 'transcribe' && m === 'POST') { const tu = auth(req); if (!tu) throw bad(401, 'Sessão expirada. Entre novamente.'); return await transcribe(req, res, tu); }
   const body = (m === 'POST' || m === 'PUT' || m === 'PATCH') ? await readBody(req) : {};
+  if (a === 'ai' && m === 'POST') { const au = auth(req); if (!au) throw bad(401, 'Sessão expirada. Entre novamente.'); return await askAI(req, res, au, body); }
 
-  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup });
+  if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: !!(CFG.ai.provider && CFG.ai.key) });
 
   if (a === 'register' && m === 'POST') {
     const n = Q('SELECT COUNT(*) c FROM users').get().c;
@@ -131,7 +204,11 @@ async function api(req, res, u, p) {
     Q('DELETE FROM sessions WHERE token_hash=?').run(user.th);
     return send(res, 200, { ok: true }, { 'Set-Cookie': 'mo_sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
   }
-  if (a === 'me' && parts.length === 1 && m === 'GET') return send(res, 200, { user: pub(user) });
+  if (a === 'me' && parts.length === 1 && m === 'GET') return send(res, 200, { user: { ...pub(user), last_login: user.last_login } });
+  if (a === 'me' && parts[1] === 'logout-all' && m === 'POST') {
+    Q('DELETE FROM sessions WHERE user_id=?').run(user.id); audit(user.id, 'logout.all');
+    return send(res, 200, { ok: true }, { 'Set-Cookie': 'mo_sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
+  }
   if (a === 'me' && parts[1] === 'password' && m === 'POST') {
     const row = Q('SELECT pass_hash FROM users WHERE id=?').get(user.id);
     if (!(await checkPw(String(body.current || ''), row.pass_hash))) throw bad(403, 'Senha atual incorreta');
@@ -139,6 +216,40 @@ async function api(req, res, u, p) {
     Q('DELETE FROM sessions WHERE user_id=? AND token_hash<>?').run(user.id, user.th);
     audit(user.id, 'password.change');
     return send(res, 200, { ok: true });
+  }
+
+  if (a === 'userdata') {
+    const k = parts[1]; if (!k || !KEY.test(k)) throw bad(400, 'Chave inválida');
+    if (m === 'GET') { const r = Q('SELECT v FROM userdata WHERE user_id=? AND k=?').get(user.id, k); return send(res, 200, { value: r ? JSON.parse(r.v) : null }); }
+    if (m === 'PUT') { if (body.value === undefined) throw bad(400, 'Envie "value"'); Q("INSERT INTO userdata(user_id,k,v) VALUES(?,?,?) ON CONFLICT(user_id,k) DO UPDATE SET v=excluded.v,updated_at=datetime('now')").run(user.id, k, JSON.stringify(body.value)); return send(res, 200, { ok: true }); }
+    if (m === 'DELETE') { Q('DELETE FROM userdata WHERE user_id=? AND k=?').run(user.id, k); return send(res, 200, { ok: true }); }
+  }
+
+  if (a === 'radia') {
+    const id = parts[1];
+    if (!id && m === 'GET') {
+      const lat = +u.searchParams.get('lat'), lon = +u.searchParams.get('lon'), lim = Math.min(+u.searchParams.get('limit') || 30, 100);
+      if (!isFinite(lat) || !isFinite(lon)) throw bad(400, 'Informe lat e lon');
+      const all = Q('SELECT p.id,p.lat,p.lon FROM posts p ORDER BY p.created_at DESC LIMIT 5000').all()
+        .map(r => ({ id: r.id, d: km(lat, lon, r.lat, r.lon) })).sort((x, y) => x.d - y.d).slice(0, lim);
+      const out = all.map(x => { const r = Q('SELECT p.id,p.title,p.descr,p.lat,p.lon,p.created_at,u.name author,p.owner_id,json_extract(p.data,\'$.cover\') cover FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.id=?').get(x.id); return { ...r, dist_km: Math.round(x.d), mine: r.owner_id === user.id, owner_id: undefined }; });
+      return send(res, 200, { posts: out });
+    }
+    if (!id && m === 'POST') {
+      limit('post|' + user.id, 20);
+      const title = String(body.title || '').trim().slice(0, 100), lat = +body.lat, lon = +body.lon;
+      if (!title) throw bad(400, 'Dê um título à publicação');
+      if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw bad(400, 'Posição inválida');
+      if (!body.data || !Array.isArray(body.data.tracks)) throw bad(400, 'Composição inválida');
+      const json = JSON.stringify(body.data); if (json.length > 3 * 1048576) throw bad(413, 'Composição grande demais para publicar');
+      const pid = crypto.randomBytes(9).toString('base64url');
+      Q('INSERT INTO posts(id,owner_id,title,descr,lat,lon,data) VALUES(?,?,?,?,?,?,?)').run(pid, user.id, title, String(body.desc || '').slice(0, 600), lat, lon, json);
+      audit(user.id, 'radia.publish', title); return send(res, 201, { id: pid });
+    }
+    if (id && !/^[A-Za-z0-9_-]{6,40}$/.test(id)) throw bad(400, 'Identificador inválido');
+    const post = id ? Q('SELECT p.*,u.name author FROM posts p JOIN users u ON u.id=p.owner_id WHERE p.id=?').get(id) : null;
+    if (id && m === 'GET') { if (!post) throw bad(404, 'Publicação não encontrada'); return send(res, 200, { post: { id: post.id, title: post.title, descr: post.descr, lat: post.lat, lon: post.lon, author: post.author, created_at: post.created_at, data: JSON.parse(post.data) } }); }
+    if (id && m === 'DELETE') { if (!post || (post.owner_id !== user.id && user.role !== 'admin')) throw bad(404, 'Publicação não encontrada'); Q('DELETE FROM posts WHERE id=?').run(id); audit(user.id, 'radia.delete', post.title); return send(res, 200, { ok: true }); }
   }
 
   if (a === 'projects') {

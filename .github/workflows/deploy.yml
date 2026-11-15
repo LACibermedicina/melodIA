@@ -1,0 +1,93 @@
+# Publica o MelodIA Orquestra na VPS a cada push na main (ou à mão: Actions > "Publicar na VPS" > Run workflow).
+# Mesmo modelo do appet e do revalida: copia o app para a VPS (rsync: não apaga nada lá e não toca no .env nem no banco)
+# e roda deploy/vps-preparar.sh, que na 1ª vez instala tudo (Node 22 só para este app, porta livre > 1000,
+# proxy reverso + HTTPS, backup diário) e nas seguintes só testa, atualiza e reinicia.
+#
+# Segredo OBRIGATÓRIO (Settings > Secrets and variables > Actions > Secrets):
+#   VPS_SSH_KEY   chave privada SSH com acesso de root à VPS (a mesma do appet/revalida)
+# Segredo OPCIONAL:
+#   MELODIA_ENV   conteúdo do .env de produção (chaves de IA/transcrição, ALLOW_SIGNUP, SESSION_DAYS…)
+# Variáveis OPCIONAIS (aba Variables), com estes padrões:
+#   VPS_HOST (159.223.22.82)  VPS_USER (root)  VPS_PORT (22)  VPS_DIR (/opt/melodia)
+#   DOMINIO_MELODIA (melodia.m3d.pro)  EMAIL_CERT (e-mail para o Let's Encrypt)
+name: Publicar na VPS
+
+on:
+  push:
+    branches: [main]
+    paths: ['server.js', 'backup.js', 'schema.sql', 'package.json', '.env.example', 'public/**', 'test/**', 'deploy/**', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: publicar-vps-melodia
+  cancel-in-progress: false
+
+env:
+  HOST: ${{ vars.VPS_HOST || '159.223.22.82' }}
+  USUARIO: ${{ vars.VPS_USER || 'root' }}
+  PORTA_SSH: ${{ vars.VPS_PORT || '22' }}
+  PASTA: ${{ vars.VPS_DIR || '/opt/melodia' }}
+  DOMINIO: ${{ vars.DOMINIO_MELODIA || 'melodia.m3d.pro' }}
+  EMAIL_CERT: ${{ vars.EMAIL_CERT || '' }}
+
+jobs:
+  testar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Conferir sintaxe
+        run: |
+          node --check server.js && node --check backup.js
+          bash -n deploy/vps-preparar.sh
+      - name: Teste de fumaça (contas, projetos, radIA, segurança)
+        run: npm test
+
+  publicar:
+    needs: testar
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Preparar SSH
+        env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::Falta o segredo VPS_SSH_KEY (Settings > Secrets and variables > Actions). Use a mesma chave do appet/revalida."; exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" | tr -d '\r' > ~/.ssh/vps && chmod 600 ~/.ssh/vps
+          ssh-keyscan -p "$PORTA_SSH" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH=ssh -i $HOME/.ssh/vps -p $PORTA_SSH -o ServerAliveInterval=30 $USUARIO@$HOST" >> "$GITHUB_ENV"
+          echo "SUDO=$([ "$USUARIO" = root ] && echo '' || echo 'sudo -n')" >> "$GITHUB_ENV"
+
+      - name: Testar acesso
+        run: $SSH "echo conectado em \$(hostname) como \$(whoami)"
+
+      - name: Copiar o app para a VPS
+        run: |
+          $SSH "$SUDO mkdir -p '$PASTA' && $SUDO chown -R \$(whoami) '$PASTA' && (command -v rsync >/dev/null || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq rsync))"
+          rsync -az --stats \
+            --exclude '.env' --exclude 'data/' --exclude 'node_modules/' --exclude '.DS_Store' \
+            -e "ssh -i $HOME/.ssh/vps -p $PORTA_SSH" \
+            server.js backup.js schema.sql package.json .env.example public test deploy "$USUARIO@$HOST:$PASTA/" | tail -8
+
+      - name: Enviar chaves (se o segredo MELODIA_ENV existir)
+        env:
+          MELODIA_ENV: ${{ secrets.MELODIA_ENV }}
+        run: |
+          if [ -n "$MELODIA_ENV" ]; then
+            printf '%s\n' "$MELODIA_ENV" | $SSH "umask 077; cat > /tmp/melodia.env"
+            echo "ENV_ARG=--env /tmp/melodia.env" >> "$GITHUB_ENV"
+          else
+            echo "Sem MELODIA_ENV: mantém o .env que já está na VPS."
+          fi
+
+      - name: Instalar ou atualizar, proxy reverso e HTTPS
+        run: |
+          EXTRA=""; [ -n "$EMAIL_CERT" ] && EXTRA="--email $EMAIL_CERT"
+          $SSH "cd '$PASTA' && $SUDO bash deploy/vps-preparar.sh --dominio '$DOMINIO' $EXTRA ${ENV_ARG:-}"
