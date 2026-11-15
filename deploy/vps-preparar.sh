@@ -48,6 +48,17 @@ if [ -z "$IP_DNS" ]; then av "$DOMINIO ainda não resolve. Crie um registro A: $
 elif [ "$IP_DNS" != "$IP_VPS" ]; then av "$DOMINIO aponta para $IP_DNS, mas esta VPS é $IP_VPS (Cloudflare com proxy laranja também causa isso)."
 else DNS_OK=1; ok "$DOMINIO -> $IP_VPS"; fi
 
+# ---------- recursos da VPS (para o canto neural) ----------
+titulo "Recursos da VPS"
+echo "CPU: $(nproc) núcleos · $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
+echo "Flags: $(grep -m1 -o -w -E 'avx2|avx512f' /proc/cpuinfo | sort -u | xargs)"
+free -m | awk 'NR==2{print "RAM: "$2" MB total, "$7" MB disponível"} NR==3{print "Swap: "$2" MB"}'
+df -h / | awk 'NR==2{print "Disco: "$4" livres de "$2}'
+command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "GPU: nenhuma"
+echo "Python: $(python3 --version 2>&1) · pip: $(python3 -m pip --version 2>/dev/null | cut -d' ' -f2 || echo ausente) · venv: $(python3 -c 'import venv' 2>/dev/null && echo ok || echo ausente)"
+echo "Carga: $(cut -d' ' -f1-3 /proc/loadavg) · SO: $(. /etc/os-release; echo $PRETTY_NAME)"
+command -v docker >/dev/null 2>&1 && echo "Docker: $(docker --version | cut -d, -f1)" || echo "Docker: ausente"
+
 # ---------- 1) Node.js >= 22.13 (node:sqlite) ----------
 titulo "Node.js"
 command -v ss >/dev/null 2>&1 || apt_instalar iproute2
