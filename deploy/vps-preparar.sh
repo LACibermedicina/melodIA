@@ -292,10 +292,10 @@ if [ "$CANTO_OK" = 1 ]; then
   TW="$(ls "$TD"/autoteste_*.wav 2>/dev/null | head -1)"
   if [ -n "$TW" ]; then
     T0=$(date +%s%N)
-    RT2="$(curl -fsS --max-time 600 -H 'Content-Type: application/json' -d '{"wav":"'"$TW"'","asr":true}' "http://127.0.0.1:$(lerenv CANTO_PORT)/transcrever" || true)"
+    RT2="$(curl -fsS --max-time 300 -H 'Content-Type: application/json' -d '{"wav":"'"$TW"'","asr":true}' "http://127.0.0.1:$(lerenv CANTO_PORT)/transcrever" || true)"
     N2="$(echo "$RT2" | grep -o '"t":' | wc -l || true)"; W2="$(echo "$RT2" | grep -o '"w": *"[^"]*"' | sed 's/"w": *//' | tr -d '"' | tr '\n' ' ' || true)"; E2="$(echo "$RT2" | grep -o '"asrError": *"[^"]*"' || true)"
     if [ "$N2" -ge 5 ]; then ok "Autoteste da transcrição em $(( ($(date +%s%N)-T0)/1000000 )) ms: $N2 notas · letra: ${W2:-(sem letra)} $E2"
-    else av "Autoteste da transcrição falhou: $(echo "$RT2" | head -c 400)"; fi
+    else av "Autoteste da transcrição falhou: $(echo "$RT2" | head -c 400)"; journalctl -u melodia-canto -n 25 --no-pager || true; systemctl restart melodia-canto || true; fi
   fi
   rm -rf "$TD"
   systemctl show melodia-canto -p MemoryCurrent | sed 's/MemoryCurrent=/Memória do canto: /'

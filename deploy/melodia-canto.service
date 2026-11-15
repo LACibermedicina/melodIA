@@ -14,8 +14,8 @@ RestartSec=5
 # A VPS é compartilhada: o canto cede CPU e tem teto de memória para nunca derrubar os outros apps.
 Nice=10
 CPUWeight=40
-MemoryHigh=700M
-MemoryMax=1000M
+MemoryHigh=950M
+MemoryMax=1100M
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
