@@ -7,7 +7,7 @@ import json, os, sys, time, threading, traceback, wave, subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import svs, gpu
+import svs, gpu, transcricao
 from tts import load_tts
 try:
     import pyworld as pw
@@ -79,6 +79,34 @@ def job(b):
             'alignments': bool(getattr(TTS, 'alignments', False)), 'timbre': note, 'gpu': gpu_used, 'gpuError': gpu_err,
             'palavras': {'alinhadas': st['al'], 'silaba_a_silaba': st['fb'], 'exemplos': st['fbw'][-6:]}}
 
+def job_tr(b):
+    """Transcrição de voz cantada: notas + ornamentos + efeitos + letra alinhada no tempo."""
+    t0 = time.time(); prog = b.get('progress')
+    def progress(f, msg):
+        if prog:
+            try:
+                with open(prog + '.tmp', 'w', encoding='utf-8') as fh: json.dump({'p': round(float(f), 3), 'msg': msg}, fh)
+                os.replace(prog + '.tmp', prog)
+            except Exception: pass
+    progress(.03, 'Lendo a gravação')
+    x, sr = read_wav(b['wav'])
+    if sr != 16000:
+        from scipy.signal import resample_poly
+        import math as _m
+        g = _m.gcd(16000, sr); x = resample_poly(x, 16000 // g, sr // g); sr = 16000
+    x = x[:16000 * 600]
+    words, asr, err = [], '', ''
+    if b.get('asr', True):
+        try:
+            words, lang = transcricao.whisper_words(x, os.environ.get('CANTO_ASR_MODEL', 'base'), os.path.join(MODELS, 'whisper'), progress)
+            asr = 'whisper-' + os.environ.get('CANTO_ASR_MODEL', 'base')
+        except Exception as e:
+            err = str(e)[:200]; traceback.print_exc()
+    R = transcricao.transcribe_song(pw, x, sr, words, progress)
+    R.update(words=words, asr=asr, asrError=err, dur=round(len(x) / sr, 2), ms=int((time.time() - t0) * 1000))
+    progress(1, 'Pronto')
+    return R
+
 class H(BaseHTTPRequestHandler):
     def _send(self, code, obj):
         b = json.dumps(obj).encode(); self.send_response(code)
@@ -90,14 +118,14 @@ class H(BaseHTTPRequestHandler):
                                     'gpu': gpu.provider(), 'busy': STATE['busy'], 'done': STATE['done']})
         self._send(404, {'error': 'não encontrado'})
     def do_POST(self):
-        if self.path != '/render': return self._send(404, {'error': 'não encontrado'})
+        if self.path not in ('/render', '/transcrever'): return self._send(404, {'error': 'não encontrado'})
         try:
             n = int(self.headers.get('Content-Length') or 0)
             if n > 8 * 1048576: return self._send(413, {'error': 'pedido grande demais'})
             b = json.loads(self.rfile.read(n) or b'{}')
             with LOCK:
                 STATE['busy'] = True
-                try: r = job(b)
+                try: r = job_tr(b) if self.path == '/transcrever' else job(b)
                 finally: STATE['busy'] = False
             self._send(200, r)
         except Exception as e:
@@ -106,4 +134,10 @@ class H(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     port = int(os.environ.get('CANTO_PORT', '3290'))
     print('Canto natural em 127.0.0.1:%d · voz %s · alinhamento %s · GPU externa: %s' % (port, TTS.name, getattr(TTS, 'alignments', False), gpu.provider() or 'não'), flush=True)
+    def _idle():
+        while True:
+            time.sleep(60)
+            try: transcricao.whisper_idle(600)
+            except Exception: pass
+    threading.Thread(target=_idle, daemon=True).start()
     ThreadingHTTPServer(('127.0.0.1', port), H).serve_forever()

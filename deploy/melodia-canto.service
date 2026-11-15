@@ -7,15 +7,15 @@ Type=simple
 User=__USER__
 WorkingDirectory=__DIR__/canto
 EnvironmentFile=__DIR__/.env
-Environment=OMP_NUM_THREADS=1 PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1 PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
 ExecStart=__VENV__/bin/python __DIR__/canto/servico.py
 Restart=always
 RestartSec=5
 # A VPS é compartilhada: o canto cede CPU e tem teto de memória para nunca derrubar os outros apps.
 Nice=10
 CPUWeight=40
-MemoryHigh=600M
-MemoryMax=800M
+MemoryHigh=700M
+MemoryMax=1000M
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true

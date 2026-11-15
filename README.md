@@ -135,6 +135,20 @@ No app: passo 4 → **🎙 Gerar canto natural** (é disparado sozinho depois de
 
 Na VPS, o deploy instala tudo sozinho: Python isolado em `/opt/melodia-canto/venv`, a voz em `/var/lib/melodia/canto-modelos` e o serviço `melodia-canto`, que só escuta em 127.0.0.1, roda com prioridade baixa e tem teto de 800 MB de memória para não afetar os outros apps. Se a instalação falhar, o site segue com a voz do navegador. O log de cada publicação traz um autoteste ("canta a vida") com o tempo de geração.
 
+## Canto alinhado: letra, ornamentos e efeitos vocais (v9)
+
+Quando a gravação é **voz cantada** (opção marcada por padrão no passo 1) e o canto natural está instalado no servidor, a análise do trecho é feita em `canto/transcricao.py`:
+
+1. **Altura** com Harvest (WORLD) a cada 10 ms, com correção de oitava contra a mediana móvel. Isso elimina as notas graves falsas da análise do navegador.
+2. **Sílabas cantadas**: trechos sonoros são divididos nos vales de energia. Cada um é uma sílaba ou um efeito.
+3. **Notas e ornamentos** dentro de cada sílaba: platôs de altura viram notas. Deslizes de entrada (scoop), quedas, vibrato e apojaturas com menos de 80 ms ficam como ornamento da nota vizinha e não roubam sílaba.
+4. **Letra no tempo** com Whisper local (`faster-whisper`, CPU int8, modelo `CANTO_ASR_MODEL`, padrão `base`). Cada palavra cai nas sílabas cantadas do seu intervalo. Uma sílaba que continua em outra altura é **melisma**, e um som sem palavra é **efeito vocal** (`ô`, `ê`, `tá`, `hm`).
+5. **IA de contexto** (opcional, usa a mesma IA do app: `AI_PROVIDER`/`AI_API_KEY`): revisa por frases onde é pronúncia de sílaba, melisma, ornamento ou efeito rítmico vocal e corrige sílabas mal reconhecidas. Uma trava desfaz o trecho se a IA apagar sílabas da letra. Botão **🧠 Realinhar letra com IA** no passo 4.
+
+A faixa **Canto** usa o tempo de cada sílaba em vez de distribuir a letra em sequência, e transpõe só por oitavas inteiras. Letra digitada ou gerada depois também é encaixada nas sílabas cantadas detectadas. Sem o serviço, o app volta para a análise do navegador.
+
+Rota: `POST /api/canto/transcrever` (WAV mono 16 kHz no corpo; `/sem-letra` pula o Whisper) → trabalho na fila do canto, acompanhado em `GET /api/canto/jobs/:id`.
+
 ## Publicação automática na VPS (melodia.m3d.pro)
 
 Mesmo modelo do **appet** e do **revalida**: a cada push na `main`, o GitHub Actions roda os testes, copia o app para `/opt/melodia` na VPS e executa `deploy/vps-preparar.sh`.

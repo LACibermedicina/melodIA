@@ -2725,6 +2725,92 @@ MTIP[6]='Escolha seu instrumento e o que quer tocar: eu escrevo os estudos e toc
 var _op8=openP;openP=function(p){_op8(p);LRN.sel=0;LRN.st=null;var sh=$('#lrnSheet');if(sh&&!sh.hidden){lrnPanel();lrnShow(0)}};
 lrnInit();
 
+/* ====== v9 · canto alinhado: notas, ornamentos, efeitos vocais e letra no tempo (servidor + IA) ====== */
+if(CFG.vozIA===undefined)CFG.vozIA=1;
+var K9={silaba:'sílaba',melisma:'melisma',efeito:'efeito vocal',ornamento:'ornamento'};
+function sleep9(ms){return new Promise(function(o){setTimeout(o,ms)})}
+(function(){var row=$('#rec')&&$('#rec').parentElement;if(!row)return;row.insertAdjacentHTML('afterend','<label class="chk" style="margin:6px 0 2px"><input type="checkbox" id="vozIA"'+(CFG.vozIA?' checked':'')+'/> É voz cantada: alinhar letra, ornamentos e efeitos vocais com IA no servidor</label>');
+$('#vozIA').addEventListener('change',function(e){CFG.vozIA=e.target.checked?1:0;try{localStorage.setItem('melodia.cfg',JSON.stringify(CFG))}catch(x){}})})();
+/* sílabas do português sem separar dígrafos (ca-mi-nho, fi-lho, cho-ro) */
+syl=function(text){var out=[],re=new RegExp('[^'+VW+']*['+VW+']+(?:[nrsmlz](?!['+VW+']))?','g');
+String(text||'').toLowerCase().replace(/[^a-záéíóúâêôãõàçü\s]/g,' ').replace(/nh/g,'ɲ').replace(/lh/g,'ʎ').replace(/ch/g,'ʃ').split(/\s+/).filter(Boolean).forEach(function(w){var m=w.match(re)||[],j=m.join('').length;if(!m.length)return;if(j<w.length)m[m.length-1]+=w.slice(j);m.forEach(function(s){out.push(s.replace(/ɲ/g,'nh').replace(/ʎ/g,'lh').replace(/ʃ/g,'ch'))})});return out};
+/* quantização em semicolcheias que preserva sílabas, tipo e ornamentos */
+function quant9(raw,bpm){var b=bpm/60,q=[];raw.forEach(function(n){n.k=n.k||n.kind;var t=Math.round(n.t*b*4)/4,d=Math.max(.25,Math.round(n.d*b*4)/4);if(q.length){var L=q[q.length-1];if(t<=L.t){if(!(n.s&&n.k==='silaba')&&(n.k==='melisma'||n.d<.12)){L.d=Math.max(L.d,t+d-L.t);if(n.grace&&n.grace.length)L.grace=(L.grace||[]).concat(n.grace);return}t=L.t+.25}}
+q.push({t:t,d:d,m:n.m,s:n.s||'',k:n.k||'',f:n.first?1:0,wi:!!n.wi,wf:!!n.wf,orn:(n.orn||[]).filter(function(o){return o!=='grace'}),grace:n.grace||[]})});
+q.forEach(function(n,i){var nx=q[i+1];if(nx&&n.t+n.d>nx.t)n.d=Math.max(.25,nx.t-n.t)});return q}
+async function trCanto(buf,a,b,withWords){var sr=16000,len=Math.min(b-a,600),oc=new OfflineAudioContext(1,Math.max(1,Math.floor(len*sr)),sr),src=oc.createBufferSource();src.buffer=buf;src.connect(oc.destination);src.start(0,a,len);
+var rb=await oc.startRendering(),r=await fetch('/api/canto/transcrever'+(withWords?'':'/sem-letra'),{method:'POST',headers:{'Content-Type':'audio/wav','X-Requested-With':'melodia'},credentials:'same-origin',body:wavBytes(rb)}),j=null;try{j=await r.json()}catch(e){}
+if(!r.ok)throw new Error((j&&j.error)||('erro '+r.status));var steps=['Fila','Reconhecendo a letra','Altura e sílabas','Notas e ornamentos'];tkStart('trc',{title:'Transcrição do canto',steps:steps,msg:'Enviando a gravação…'});
+while(j.status==='queued'||j.status==='running'){var p=j.progress||{},pm=p.msg||'';var st=j.status==='queued'?0:/letra|reconhec/i.test(pm)?1:/altura/i.test(pm)?2:/sílabas|notas/i.test(pm)?3:1;
+tkSet('trc',j.status==='queued'?1:2+(p.p||0)*95,j.status==='queued'?'Na fila'+(j.ahead?' · '+j.ahead+' antes':'')+'…':pm+'…',st);prog(15+(p.p||0)*70,j.status==='queued'?'Na fila do servidor':pm,'transcrição do canto');await sleep9(1500);j=await api('GET','/api/canto/jobs/'+j.id)}
+if(j.status!=='done'){tkEnd('trc',false,j.error||'falhou');throw new Error(j.error||'falhou')}var R=j.result,S=R.stats||{};
+tkEnd('trc',true,(R.words||[]).length+' palavras · '+(S.silaba||0)+' sílabas · '+(S.melisma||0)+' melismas · '+(S.efeito||0)+' efeitos · '+(S.ornamentos||0)+' ornamentos');return R}
+/* análise: voz cantada vai para o servidor (Harvest + Whisper + alinhamento); o resto segue como antes */
+var _an9=analyze;analyze=async function(buf,name,O){O=O||{};
+if(!(CFG.vozIA&&typeof SRV!=='undefined'&&SRV&&CN6&&CN6.ok)||(O.rep||1)!==1||(O.str||1)!==1)return _an9(buf,name,O);
+var a=O.a||0,b=O.b||buf.duration,R;try{prog(5,'Enviando a voz cantada ao servidor','notas, ornamentos e letra no tempo');await tick();R=await trCanto(buf,a,b,!(pTxt&&pTxt.length>3))}
+catch(e){msg('Transcrição de canto no servidor indisponível ('+e.message+'). Usando a análise do navegador.');return _an9(buf,name,O)}
+if(!R||!R.notes||R.notes.length<6){msg('O servidor não achou melodia cantada clara; usando a análise do navegador.');return _an9(buf,name,O)}
+prog(88,'Montando a partitura e a orquestra','tom, harmonia, baixo e percussão');await tick();
+var bpm=Math.max(50,Math.min(180,Math.round(R.bpm||100))),Q=quant9(R.notes,bpm),vd=P&&P.voiceDesc;
+P=newProject(name);P.bpm=bpm;P.style=$('#sty').value;if(vd)P.voiceDesc=vd;T('mel').notes=Q;orchestrate(true);if(BRIEF&&BRIEF.spec){applySpec(BRIEF.spec);P.brief=BRIEF.text}
+var words=(R.words||[]).map(function(w){return w.w}).join(' ').replace(/\s+([,.!?;:])/g,'$1').trim();
+if(pTxt&&pTxt.length>3){P.lyrics=pTxt.trim();alinharTextoDigitado(P.lyrics)}else if(words){P.lyrics=words}
+P.lyrSrc=words||pTxt?'audio':'';P.alin={lyrics:P.lyrics,asr:R.asr,stats:R.stats,at:Date.now(),ia:false};if(P.lyrics)pTxt=P.lyrics;
+P.src={name:name,dur:buf.duration,a:a,b:b,rep:1,used:Math.min(b-a,600),total:b-a};
+var nb=Math.ceil(Q.reduce(function(m,n){return Math.max(m,n.t+n.d)},0)/4),bs={};Q.forEach(function(n){bs[Math.floor(n.t/4)]=1});
+LASTST={frames:Q.length,active:Q.length,notes:Q.length,cb:Object.keys(bs).length,nb:nb};buildVoice();selT='mel';selN=-1;sync();persist();
+var S=R.stats||{};prog(100,'Análise concluída');
+msg('Pronto: canto transcrito no servidor · '+Q.length+' notas em '+nb+' compassos, '+bpm+' bpm, '+keyName()+' · '+(R.words||[]).length+' palavras alinhadas ('+(R.asr||'sem reconhecimento de letra')+') · '+(S.silaba||0)+' sílabas cantadas, '+(S.melisma||0)+' notas em melisma, '+(S.efeito||0)+' efeitos vocais e '+(S.ornamentos||0)+' ornamentos (deslizes, quedas, apojaturas e vibrato) preservados.'+(R.asrError?' Reconhecimento de letra falhou: '+R.asrError:''));
+if(P.lyrics)aiAlinhar(true)};
+/* texto digitado pelo usuário: usa as sílabas cantadas detectadas como âncoras */
+function alinharTextoDigitado(txt){var M=T('mel').notes,S=syl(txt),anc=M.filter(function(n){return n.k==='silaba'||n.f||(n.k==='efeito'&&n.d>=.5)});if(!S.length||!anc.length)return;
+/* sobram âncoras: as mais curtas viram melisma; faltam: as últimas sílabas se juntam na última âncora */
+while(anc.length>S.length){var mi=1,md=1e9;anc.forEach(function(n,k){if(k>0&&n.d<md){md=n.d;mi=k}});anc.splice(mi,1)}
+M.forEach(function(n){if(anc.indexOf(n)<0&&(n.k==='silaba'||n.k==='efeito')){n.k='melisma';n.s=''}});var use=anc;use.forEach(function(n,i){n.k='silaba';n.s=i===use.length-1&&S.length>use.length?S.slice(i).join(''):S[i]});
+var words=String(txt).toLowerCase().replace(/[^a-záéíóúâêôãõàçü\s]/g,' ').split(/\s+/).filter(Boolean),k=0;words.forEach(function(w){var n=syl(w).length;for(var i=0;i<n&&k<use.length;i++,k++){use[k].wi=i===0;use[k].wf=i===n-1}})}
+/* montagem da voz: segue o tempo de cada sílaba e preserva o desenho da melodia (só desloca por oitavas inteiras) */
+var _bv9=buildVoice;buildVoice=function(){var M=T('mel').notes,z=T('voz'),v=voiceFor(P);if(!M.length){z.notes=[];return}
+var aligned=P.alin&&P.alin.lyrics===P.lyrics&&M.some(function(n){return n.k});
+var mean=M.reduce(function(a,n){return a+n.m},0)/M.length,sh=Math.round(((v.c||64)-mean)/12)*12,lo=v.lo!==undefined?v.lo:(v.c||64)-12,hi=v.hi!==undefined?v.hi:(v.c||64)+12;
+var outLo=M.filter(function(n){return n.m+sh<lo-3}).length,outHi=M.filter(function(n){return n.m+sh>hi+3}).length;if(outLo>outHi*2&&outLo>M.length*.15)sh+=12;else if(outHi>outLo*2&&outHi>M.length*.15)sh-=12;
+var notes=[];
+if(aligned){M.forEach(function(n){var g=(n.grace||[]).slice(0,2),gd=Math.min(.125,n.d/4);
+g.forEach(function(gm,j){notes.push({t:n.t+j*gd,d:gd,m:gm+sh,s:j===0?(n.s||''):'',k:'ornamento',wi:j===0&&n.wi,wf:false})});
+var off=g.length*gd;notes.push({t:n.t+off,d:Math.max(.1,n.d-off),m:n.m+sh,s:g.length?'':(n.s||''),k:n.k,wi:!g.length&&n.wi,wf:n.wf,orn:n.orn})});
+P.sung=[M.filter(function(n){return n.k==='silaba'}).length,syl(P.lyrics||'').length]}
+else{var S=(P.sylAI&&P.sylFor===P.lyrics)?P.sylAI:syl(P.lyrics);if(!S.length){z.notes=[];return}
+/* sem tempo das palavras: notas curtas de passagem viram melisma; as âncoras recebem as sílabas em ordem */
+var anc=M.map(function(n,i){var p=M[i-1],nx=M[i+1],orn=n.d<=.25&&((p&&Math.abs(p.m-n.m)<=2&&p.t+p.d>=n.t-.01)||(nx&&Math.abs(nx.m-n.m)<=2));return !orn});
+var idx=[];anc.forEach(function(a,i){if(a)idx.push(i)});while(idx.length>S.length){var mi=0,md=1e9;idx.forEach(function(ix,k){if(k>0&&M[ix].d<md){md=M[ix].d;mi=k}});idx.splice(mi,1)}
+var ws=String(P.lyrics||'').toLowerCase().replace(/[^a-záéíóúâêôãõàçü\s]/g,' ').split(/\s+/).filter(Boolean),fl=[];ws.forEach(function(w){var n=syl(w).length;for(var i=0;i<n;i++)fl.push({wi:i===0,wf:i===n-1})});
+var k=0,map={};idx.forEach(function(ix,j){map[ix]=j});M.forEach(function(n,i){var j=map[i],s=j===undefined?'':(j===idx.length-1&&S.length>idx.length?S.slice(j).join(''):S[j]);notes.push({t:n.t,d:n.d,m:n.m+sh,s:s,k:j===undefined?'melisma':'silaba',wi:j!==undefined&&fl[j]?fl[j].wi:false,wf:j!==undefined&&fl[j]?fl[j].wf:false})});
+P.sung=[Math.min(S.length,idx.length),S.length]}
+notes.forEach(function(n){var base=n.s||'';n.v=vowel(base||'a');n.c=base?cons(base):''});
+var last='a';notes.forEach(function(n){if(n.s)last=n.s;else n.v=vowel(last)});z.notes=notes};
+var _pl9=postLyrics;postLyrics=function(txt){if(P&&P.alin&&P.alin.lyrics===P.lyrics&&P.lyrics&&(!txt||txt.trim()===P.lyrics)){buildVoice();sync();persist();return}
+/* letra nova (digitada, da IA ou transcrita no navegador) sobre um canto já segmentado: alinha pelas sílabas cantadas detectadas */
+if(P&&P.alin&&txt&&txt.trim()&&T('mel').notes.some(function(n){return n.k})){P.lyrics=txt.trim();pTxt=P.lyrics;alinharTextoDigitado(P.lyrics);P.alin=Object.assign({},P.alin,{lyrics:P.lyrics,ia:false});buildVoice();sync();persist();aiAlinhar(true);return}
+_pl9(txt);
+if(P&&P.alin&&P.lyrics&&P.alin.lyrics!==P.lyrics&&T('mel').notes.some(function(n){return n.k})){alinharTextoDigitado(P.lyrics);P.alin=Object.assign({},P.alin,{lyrics:P.lyrics,ia:false});buildVoice();sync();persist()}};
+/* IA de contexto: revisa onde é pronúncia de palavra, melisma, ornamento ou efeito rítmico vocal */
+var ALIN_SYS='Você é preparador vocal e transcritor musical. Recebe a letra cantada e a lista de notas de uma voz (índice i, início e duração em tempos, altura, a sílaba atual s e o tipo k). Decida, pelo contexto musical e da letra, onde cada nota é: "silaba" (pronúncia de uma sílaba da palavra), "melisma" (a mesma vogal continua em outra altura), "ornamento" (nota rápida de enfeite: apojatura, nota de passagem, deslize) ou "efeito" (efeito rítmico vocal sem palavra: uh, ô, tá, hm, scat). Regras: as sílabas da letra devem aparecer na ordem, cada uma uma única vez, em notas do tipo silaba; notas curtas (≤ 0,25 tempo) coladas a uma nota longa vizinha costumam ser ornamento; vogais sustentadas em alturas diferentes são melisma; sons rítmicos entre frases sem palavra são efeito, com sílaba curta como "ô", "ê", "tá", "hm". Corrija sílabas trocadas ou mal transcritas pelo contexto da letra. Responda SOMENTE com JSON {"notas":[{"i":0,"s":"sílaba ou vazio","k":"silaba|melisma|ornamento|efeito"}]} listando apenas as notas que devem mudar.';
+async function aiAlinhar(auto){var M=T('mel').notes;if(!M.length||!P.lyrics)return;if(!auto)tkStart('alin',{title:'Alinhamento com IA',steps:['Contexto','Revisão por frases','Voz'],msg:'Lendo letra e melodia…'});
+var M0=M.map(function(n){return [n.s,n.k]});if(!M.some(function(n){return n.k}))M.forEach(function(n,i){var z=T('voz').notes.filter(function(x){return Math.abs(x.t-n.t)<.01&&x.k!=='ornamento'})[0];n.s=z?z.s:'';n.k=z?(z.s?'silaba':'melisma'):'melisma'});
+var chunks=[],c=[];M.forEach(function(n,i){c.push(i);var nx=M[i+1];if(c.length>=110&&(!nx||nx.t-(n.t+n.d)>=.5)||c.length>=150){chunks.push(c);c=[]}});if(c.length)chunks.push(c);var changed=0,ok=0;
+for(var q=0;q<chunks.length;q++){var ids=chunks[q],lines=ids.map(function(i){var n=M[i];return i+'|'+n.t+'|'+n.d+'|'+NM[n.m%12]+(Math.floor(n.m/12)-1)+'|'+(n.s||'-')+'|'+(n.k||'?')}).join('\n');
+if(!auto)tkSet('alin',10+80*q/chunks.length,'Revisando a frase '+(q+1)+' de '+chunks.length+'…',1);
+try{var res=jparse(await aiAsk('Letra completa: """'+P.lyrics.slice(0,1800)+'"""\nNotas (i|início|duração|altura|s|k):\n'+lines,ALIN_SYS));ok++;
+var snap=ids.map(function(i){return [M[i].s,M[i].k,M[i].orn]}),nb=ids.filter(function(i){return M[i].k==='silaba'}).length,ch0=changed;
+(res&&res.notas||[]).forEach(function(x){var i=+x.i;if(ids.indexOf(i)<0||!K9[x.k])return;var n=M[i],s=String(x.s||'').toLowerCase().replace(/[^a-záéíóúâêôãõàçü]/g,'').slice(0,8);
+if(x.k==='ornamento'){n.k='melisma';n.s='';n.orn=(n.orn||[]).concat(['orn-ia'])}else{n.k=x.k;n.s=x.k==='melisma'?'':s}changed++});
+/* trava: a IA não pode sumir com sílabas da letra; se o trecho perde mais que 10%, volta como estava */
+var na=ids.filter(function(i){return M[i].k==='silaba'}).length;if(na<nb-Math.max(2,Math.ceil(nb*.1))){ids.forEach(function(i,k){M[i].s=snap[k][0];M[i].k=snap[k][1];M[i].orn=snap[k][2]});changed=ch0}}catch(e){if(!ok&&q===0){if(!auto)tkEnd('alin',false,'IA indisponível: '+e.message);M.forEach(function(n,i){n.s=M0[i][0];n.k=M0[i][1]});return}}}
+P.alin=Object.assign({},P.alin||{},{lyrics:P.lyrics,ia:true,iaMud:changed});buildVoice();sync();persist();
+if(!auto)tkEnd('alin',true,changed+' nota(s) reclassificada(s) pela IA');msg('IA de contexto revisou o alinhamento: '+changed+' nota(s) ajustada(s) entre sílaba, melisma, ornamento e efeito vocal.')}
+(function(){var gv=$('#gv');if(!gv)return;gv.insertAdjacentHTML('afterend',' <button type="button" id="alinIA" title="A IA revisa onde é palavra, melisma, ornamento ou efeito vocal">🧠 Realinhar letra com IA</button>');$('#alinIA').addEventListener('click',function(){if(!T('mel').notes.length||!P.lyrics){msg('Precisa de melodia e letra para realinhar.');return}aiAlinhar(false)})})();
+setTimeout(function(){if(window.__dbg)Object.assign(window.__dbg,{quant9:quant9,aiAlinhar:aiAlinhar,alinharTextoDigitado:alinharTextoDigitado,syl9:syl,buildVoice9:function(){buildVoice();sync()},T9:T})},0);
+
 mInit();
 brandify();window.__dbg={lrnBuild:lrnBuild,lrnHarmony:lrnHarmony,voicing:voicing,LI:LI,get LRN(){return LRN},get CN6(){return CN6},cantoValid:cantoValid,naturalReady:naturalReady,cantoRefUpload:cantoRefUpload,get VX(){return VX},render:render,vdirResolve:vdirResolve,sylInfo:sylInfo,get MS(){return MS},get P(){return P},get VX(){return VX},get CT(){return CT},get INS(){return INS},get U(){return U},get RD(){return RD}};
 

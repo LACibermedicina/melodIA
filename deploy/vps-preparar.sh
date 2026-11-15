@@ -145,6 +145,15 @@ canto_instalar(){
     fi
   done
   [ "$(stat -c %s "$MODELOS/pt_BR-faber-medium.onnx")" -gt 50000000 ] || { erro "Modelo de voz incompleto"; rm -f "$MODELOS/pt_BR-faber-medium.onnx"; return 1; }
+  # reconhecimento da letra cantada (Whisper local, CPU int8): baixa o modelo uma vez; sem ele o canto ainda é transcrito, só sem letra
+  ASR="$(lerenv CANTO_ASR_MODEL)"; ASR="${ASR:-base}"
+  if [ ! -f "$MODELOS/whisper/.ok-$ASR" ]; then
+    av "Baixando o reconhecimento de letra (Whisper $ASR)…"
+    mkdir -p "$MODELOS/whisper"
+    if HF_HUB_DISABLE_TELEMETRY=1 timeout 900 "$CANTO_VENV/bin/python" -c "from faster_whisper import WhisperModel; WhisperModel('$ASR', device='cpu', compute_type='int8', cpu_threads=1, download_root='$MODELOS/whisper')" >/tmp/melodia-whisper.log 2>&1; then
+      touch "$MODELOS/whisper/.ok-$ASR"; ok "Whisper $ASR pronto"
+    else av "Whisper não baixou (a letra cantada não será reconhecida no servidor): $(tail -2 /tmp/melodia-whisper.log)"; fi
+  fi
   chown -R "$APP_USER:$APP_USER" "$MODELOS" 2>/dev/null || true
   [ -n "$(lerenv CANTO_PORT)" ] || gravar CANTO_PORT "$(livre_a_partir 3290)"
   gravar CANTO_MODELS "$MODELOS"
@@ -278,6 +287,15 @@ if [ "$CANTO_OK" = 1 ]; then
   T0=$(date +%s%N); TD="$DATA_DIR/canto/autoteste"; mkdir -p "$TD" && chown -R "$APP_USER:$APP_USER" "$DATA_DIR/canto"
   RT="$(curl -fsS --max-time 240 -H 'Content-Type: application/json' -d '{"lines":[{"id":"lead","notes":[{"t":0,"d":1,"m":62,"s":"can","wi":true},{"t":1,"d":1,"m":64,"s":"ta","wf":true},{"t":2,"d":1,"m":67,"s":"a","wi":true,"wf":true},{"t":3,"d":1,"m":65,"s":"vi","wi":true},{"t":4,"d":2,"m":64,"s":"da","wf":true},{"t":6,"d":1,"m":62,"s":"sem","wi":true},{"t":7,"d":1,"m":64,"s":"pre","wf":true},{"t":8,"d":1,"m":65,"s":"quan","wi":true},{"t":9,"d":1,"m":64,"s":"do","wf":true},{"t":10,"d":1,"m":62,"s":"o","wi":true,"wf":true},{"t":11,"d":1,"m":60,"s":"co","wi":true},{"t":12,"d":1,"m":62,"s":"ra","wf":false},{"t":13,"d":1,"m":64,"s":"ção","wf":true},{"t":14,"d":1,"m":62,"s":"me","wi":true,"wf":true},{"t":15,"d":1,"m":60,"s":"le","wi":true},{"t":16,"d":3,"m":60,"s":"va","wf":true}]}],"bpm":96,"vd":{"vib":0.5},"voice":{"f":1},"seed":1,"outdir":"'"$TD"'","base":"autoteste"}' "http://127.0.0.1:$(lerenv CANTO_PORT)/render" || true)"
   if echo "$RT" | grep -q '"files"'; then ok "Autoteste do canto (\"canta a vida\") em $(( ($(date +%s%N)-T0)/1000000 )) ms: $RT"; else av "Autoteste do canto falhou: $RT"; journalctl -u melodia-canto -n 20 --no-pager || true; fi
+  # autoteste da transcrição: o próprio canto sintetizado volta como notas + palavras
+  TW="$(ls "$TD"/autoteste_*.wav 2>/dev/null | head -1)"
+  if [ -n "$TW" ]; then
+    T0=$(date +%s%N)
+    RT2="$(curl -fsS --max-time 600 -H 'Content-Type: application/json' -d '{"wav":"'"$TW"'","asr":true}' "http://127.0.0.1:$(lerenv CANTO_PORT)/transcrever" || true)"
+    N2="$(echo "$RT2" | grep -o '"t":' | wc -l)"; W2="$(echo "$RT2" | grep -o '"w": *"[^"]*"' | sed 's/"w": *//' | tr -d '"' | tr '\n' ' ')"
+    if [ "$N2" -ge 5 ]; then ok "Autoteste da transcrição em $(( ($(date +%s%N)-T0)/1000000 )) ms: $N2 notas · letra: ${W2:-(sem letra)} $(echo "$RT2" | grep -o '"asrError": *"[^"]*"')"
+    else av "Autoteste da transcrição falhou: $(echo "$RT2" | head -c 400)"; fi
+  fi
   rm -rf "$TD"
   systemctl show melodia-canto -p MemoryCurrent | sed 's/MemoryCurrent=/Memória do canto: /'
 fi

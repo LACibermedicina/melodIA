@@ -167,7 +167,7 @@ const PID = /^[A-Za-z0-9_-]{6,64}$/;
 
 /* ---------- canto natural: fila para o serviço Python local (voz neural + WORLD) ---------- */
 const CANTO = { port: +env.CANTO_PORT || 0, dir: path.join(CFG.data, 'canto'), ver: 'c1' };
-for (const d of ['refs', 'out']) fs.mkdirSync(path.join(CANTO.dir, d), { recursive: true });
+for (const d of ['refs', 'out', 'tr']) fs.mkdirSync(path.join(CANTO.dir, d), { recursive: true });
 const CJOBS = new Map(); let cantoChain = Promise.resolve();
 function cantoCall(method, p, body, ms) {
   return new Promise((ok, ko) => {
@@ -235,6 +235,8 @@ async function cantoApi(req, res, user, parts, m, body) {
   if (parts[1] === 'jobs' && /^[a-f0-9]{40}$/.test(parts[2] || '') && m === 'GET') {
     const sig = parts[2], rec = CJOBS.get(sig), done = path.join(out, sig + '.json');
     if (!rec && fs.existsSync(done)) return send(res, 200, { id: sig, status: 'done', result: JSON.parse(fs.readFileSync(done, 'utf8')) });
+    const dtr = path.join(CANTO.dir, 'tr', sig + '.json');
+    if (!rec && fs.existsSync(dtr)) return send(res, 200, { id: sig, status: 'done', result: JSON.parse(fs.readFileSync(dtr, 'utf8')) });
     if (!rec) throw bad(404, 'Trabalho de canto não encontrado');
     let pr = null; try { pr = JSON.parse(fs.readFileSync(path.join(out, sig + '.progress'), 'utf8')); } catch (e) { }
     const ahead = rec.status === 'queued' ? [...CJOBS.values()].filter(j => j.status === 'running' || (j.status === 'queued' && j.created < rec.created)).length : 0;
@@ -262,6 +264,30 @@ async function api(req, res, u, p) {
   const parts = p.split('/').filter(Boolean).slice(1), a = parts[0], ip = clientIp(req);
   if (a === 'transcribe' && m === 'POST') { const tu = auth(req); if (!tu) throw bad(401, 'Sessão expirada. Entre novamente.'); return await transcribe(req, res, tu); }
   if (a === 'canto' && parts[1] === 'audio' && (m === 'GET' || m === 'HEAD')) return cantoAudio(req, res, parts[2] || '');
+  if (a === 'canto' && parts[1] === 'transcrever' && m === 'POST') {
+    const cu = auth(req); if (!cu) throw bad(401, 'Sessão expirada. Entre novamente.');
+    if (!CANTO.port) throw bad(503, 'Transcrição de canto não instalada neste servidor');
+    limit('trc:' + cu.id, 20);
+    const b = await readRaw(req, 40 * 1048576);
+    if (b.length < 4000 || b.toString('ascii', 0, 4) !== 'RIFF' || b.toString('ascii', 8, 12) !== 'WAVE') throw bad(400, 'Envie o trecho em WAV');
+    const asr = String((parts[2] || '')) !== 'sem-letra';
+    const sig = sha(Buffer.concat([Buffer.from(CANTO.ver + 'tr2' + (asr ? 'a' : 'n')), b])).slice(0, 40), dir = path.join(CANTO.dir, 'tr'), done = path.join(dir, sig + '.json');
+    if (fs.existsSync(done)) return send(res, 200, { id: sig, status: 'done', result: JSON.parse(fs.readFileSync(done, 'utf8')) });
+    if (!CJOBS.has(sig)) {
+      const wav = path.join(dir, sig + '.wav'); fs.writeFileSync(wav, b);
+      const rec = { uid: cu.id, status: 'queued', created: Date.now(), kind: 'tr' }; CJOBS.set(sig, rec);
+      cantoChain = cantoChain.then(async () => {
+        rec.status = 'running';
+        try {
+          const r = await cantoCall('POST', '/transcrever', { wav, asr, progress: path.join(CANTO.dir, 'out', sig + '.progress') }, 20 * 60000);
+          fs.writeFileSync(done, JSON.stringify(r)); rec.status = 'done'; rec.result = r; audit(cu.id, 'transcrever', sig + ' ' + r.ms + 'ms ' + (r.words || []).length + ' palavras');
+        } catch (e) { rec.status = 'error'; rec.error = e.message; }
+        fs.rmSync(wav, { force: true }); fs.rmSync(path.join(CANTO.dir, 'out', sig + '.progress'), { force: true });
+        setTimeout(() => CJOBS.delete(sig), 30 * 60000);
+      });
+    }
+    const rec = CJOBS.get(sig); return send(res, 200, { id: sig, status: rec.status, result: rec.result, error: rec.error });
+  }
   if (a === 'canto' && parts[1] === 'ref' && m === 'POST') {
     const cu = auth(req); if (!cu) throw bad(401, 'Sessão expirada. Entre novamente.');
     if (!PID.test(parts[2] || '')) throw bad(400, 'Voz inválida');
