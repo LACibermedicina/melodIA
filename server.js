@@ -327,6 +327,19 @@ async function api(req, res, u, p) {
     return send(res, 200, { ok: true, bytes: b.length });
   }
   const body = (m === 'POST' || m === 'PUT' || m === 'PATCH') ? await readBody(req) : {};
+  if (a === 'erros' && m === 'POST') {
+    /* relatório de erros enviado pelo usuário (ícone ⚠ Detalhes): guardado em DATA_DIR/erros-cliente.log com um protocolo */
+    const cu = auth(req); limit('erros|' + (cu ? cu.id : clientIp(req)), cu ? 12 : 4);
+    const itens = Array.isArray(body.itens) ? body.itens.slice(0, 80) : [];
+    if (!itens.length) throw bad(400, 'Relatório vazio');
+    const protocolo = Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+    const reg = JSON.stringify({ protocolo, em: new Date().toISOString(), usuario: cu ? cu.id : null, navegador: String(body.navegador || '').slice(0, 300), tela: String(body.tela || '').slice(0, 30), url: String(body.url || '').slice(0, 200), itens }).slice(0, 200000);
+    const f = path.join(CFG.data, 'erros-cliente.log');
+    try { if (fs.existsSync(f) && fs.statSync(f).size > 5 * 1048576) fs.renameSync(f, f + '.1'); } catch (e) { }
+    fs.appendFileSync(f, reg + '\n', { mode: 0o600 });
+    audit(cu ? cu.id : null, 'erro.relatorio', protocolo + ' · ' + itens.length + ' ocorrência(s) · ' + String(itens[0] && itens[0].mensagem || '').slice(0, 120));
+    return send(res, 200, { ok: true, protocolo });
+  }
   if (a === 'ai' && m === 'POST') { const au = auth(req); if (!au) throw bad(401, 'Sessão expirada. Entre novamente.'); return await askAI(req, res, au, body); }
 
   if (a === 'status' && m === 'GET') return send(res, 200, { needsSetup: Q('SELECT COUNT(*) c FROM users').get().c === 0, allowSignup: CFG.signup, transcribe: !!CFG.tr.key, ai: AI_LIST.length > 0, aiProviders: AI_LIST.map(A => A.url.includes('pollinations') ? 'pollinations' : A.provider), canto: !!CANTO.port });

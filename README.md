@@ -160,6 +160,18 @@ Na VPS, o deploy instala tudo sozinho: Python isolado em `/opt/melodia-canto/ven
   - dicas e **guia passo a passo** que destaca cada área. Abre pelo Epi, pelo botão Guia ou com Alt+G; dois cliques fora fecham.
 - Trocar de modo: botão no topo, menu **Modo** ou `?ui=simples|avancado|classico` (clássico é o painel anterior).
 
+## Ícones e registro de erros (v11)
+
+- **Ícones discretos.** As animações dos ícones ficaram com pouca amplitude e ritmo lento. Um **neon sutil** (halo que respira devagar, laranja e ciano) acende no foco e no hover. Com "reduzir movimento" ligado no sistema, nada se mexe.
+- **Registro de erros.** O app registra:
+  - erros de script e promessas;
+  - falhas de chamadas ao servidor;
+  - etapas que falham nos cartões de tarefa;
+  - avisos de processamento.
+  Quando há ocorrências, aparece o ícone **⚠ Detalhes** com contador: na barra do modo simples, na barra de menus do avançado ou no cabeçalho clássico. Cartões de tarefa com erro também ganham o botão **🔎 Detalhes do erro**.
+- **Painel de detalhes.** Cada item mostra onde ocorreu, a mensagem, uma sugestão, o contexto (modo, tela, atividade, projeto, faixas, serviços, áudio, diagnóstico) e o detalhe técnico (stack). Dá para **copiar o relatório**, **baixar .json** ou **enviar ao suporte**.
+- **Envio ao suporte.** Vai para `POST /api/erros`, que grava em `DATA_DIR/erros-cliente.log` (rotação em 5 MB) com um **protocolo** e registra na auditoria. Na VPS: `sudo tail -n 5 /var/lib/melodia/erros-cliente.log`.
+
 ## Canto alinhado: letra, ornamentos e efeitos vocais (v9)
 
 Quando a gravação é **voz cantada** (opção marcada por padrão no passo 1) e o canto natural está instalado no servidor, a análise do trecho é feita em `canto/transcricao.py`:
