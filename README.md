@@ -141,6 +141,22 @@ No app: passo 4 → **🎙 Gerar canto natural** (é disparado sozinho depois de
 
 Na VPS, o deploy instala tudo sozinho: Python isolado em `/opt/melodia-canto/venv`, a voz em `/var/lib/melodia/canto-modelos` e o serviço `melodia-canto`, que só escuta em 127.0.0.1, roda com prioridade baixa e tem teto de 800 MB de memória para não afetar os outros apps. Se a instalação falhar, o site segue com a voz do navegador. O log de cada publicação traz um autoteste ("canta a vida") com o tempo de geração.
 
+## Interface (v10): modo simples, modo avançado e o Epi
+
+- **Modo simples (padrão).** Um prompt único: escreva a letra (ou uma ideia, e a IA escreve a letra) ou solte um áudio de referência, escolha o estilo e clique em **Criar música**. Só com a letra, a melodia é composta pelas sílabas, com as tônicas em notas mais longas (IA quando configurada, compositor local como reserva). Depois de criar, o app abre o editor:
+  - vozes com ouvir só esta, silenciar, solo, volume e edição;
+  - letra e canto;
+  - exportação (WAV, áudio, só a voz, MIDI, PDF), salvar, capa e radIA;
+  - **Aprender mais sobre o tema** (explicação por IA ou resumo calculado);
+  - **Estudar um instrumento**, com estudos, a voz do instrumento como faixa e **captura ao vivo** pelo microfone ou teclado MIDI. As notas capturadas entram como ornamentos na voz `<instrumento> · variações ao vivo`, com quantização, opção de somar ou substituir e desfazer.
+- **Modo avançado.** Mesa com barra de menus, Dock com ícones estilo macOS e cada função numa janela. A janela pode ser arrastada e redimensionada:
+  - vermelho fecha, amarelo minimiza para a área de minimizadas no Dock, verde maximiza;
+  - **dois cliques fora** fecham a janela da frente sem perder o conteúdo;
+  - posição e janelas abertas ficam lembradas.
+  No fundo da mesa ficam o avatar, o resumo do tema (tom, andamento, estilo, compassos, vozes e letra) e a **partitura da melodia**, com a nota que soa em destaque durante a reprodução.
+- **Epi**, tuno da estudantina de Medicina (beca, cintas, faixa amarela, bandurria e estetoscópio): dicas e **guia passo a passo** que destaca cada área. Abre pelo Epi, pelo botão Guia ou com Alt+G; dois cliques fora fecham.
+- Trocar de modo: botão no topo, menu **Modo** ou `?ui=simples|avancado|classico` (clássico é o painel anterior).
+
 ## Canto alinhado: letra, ornamentos e efeitos vocais (v9)
 
 Quando a gravação é **voz cantada** (opção marcada por padrão no passo 1) e o canto natural está instalado no servidor, a análise do trecho é feita em `canto/transcricao.py`:
