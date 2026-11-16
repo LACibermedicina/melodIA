@@ -154,7 +154,10 @@ Na VPS, o deploy instala tudo sozinho: Python isolado em `/opt/melodia-canto/ven
   - **dois cliques fora** fecham a janela da frente sem perder o conteúdo;
   - posição e janelas abertas ficam lembradas.
   No fundo da mesa ficam o avatar, o resumo do tema (tom, andamento, estilo, compassos, vozes e letra) e a **partitura da melodia**, com a nota que soa em destaque durante a reprodução.
-- **Epi**, tuno da estudantina de Medicina (beca, cintas, faixa amarela, bandurria e estetoscópio): dicas e **guia passo a passo** que destaca cada área. Abre pelo Epi, pelo botão Guia ou com Alt+G; dois cliques fora fecham.
+- **Epi** em 3D (`public/epi3d.html`, motor WebGL próprio do Secreto-Bot do talks), versão tuno da estudantina de Medicina:
+  - visual: boneco de juta com olho de vidro e antena, gibão de veludo preto, golilla, capa com cintas coloridas, **beca amarela** com escudo de Asclépio e debrum dourado, estetoscópio e bandurria;
+  - comportamento: segue o mouse, faz movimentos sozinho e toca a bandurria enquanto a música soa; sem WebGL, volta para o desenho 2D.
+  - dicas e **guia passo a passo** que destaca cada área. Abre pelo Epi, pelo botão Guia ou com Alt+G; dois cliques fora fecham.
 - Trocar de modo: botão no topo, menu **Modo** ou `?ui=simples|avancado|classico` (clássico é o painel anterior).
 
 ## Canto alinhado: letra, ornamentos e efeitos vocais (v9)

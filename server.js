@@ -491,7 +491,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://x');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Frame-Options', u.pathname === '/epi3d.html' ? 'SAMEORIGIN' : 'DENY');   // o Epi 3D é embutido só pelo próprio app
     res.setHeader('Referrer-Policy', 'no-referrer');
     if (u.pathname.startsWith('/api/')) return await api(req, res, u, u.pathname);
     return serveStatic(req, res, u.pathname);

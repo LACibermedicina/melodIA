@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Epi · tuno de Medicina</title>
+<!-- Epi em 3D, versão tuno da estudantina de Medicina (MelodIA): o boneco de juta do Secreto-Bot vestido de tuno,
+     com gibão de veludo preto, golilla branca, capa com cintas coloridas, BECA AMARELA de Medicina com escudo de Asclépio,
+     estetoscópio e bandurria. Motor WebGL próprio, sem dependências. Segue o mouse e faz movimentos sozinho
+     (acena, pula, dança, inclina a cabeça, levanta, toca a bandurria, balança as cintas, mexe a antena).
+     Parâmetros: ?pose=sit|stand|wave &z=1 (zoom) &toca=1. Mensagens: recebe {rv3dPose}, {rv3dMouse:[x,y,escala]},
+     {rv3dToca:true|false} (tocar enquanto a música soa) e {rv3dAct:'pulo'|'acena'|'toca'|'danca'};
+     envia {rv3d:'ok'} ao desenhar e {rv3d:'sem'} sem WebGL. -->
+<style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}canvas{display:block;width:100%;height:100%}</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Epi, o tuno de Medicina, de beca amarela e bandurria"></canvas>
+<script>
+"use strict";
+(function () {
+const cvs = document.getElementById('c');
+const alvoMsg = location.origin && location.origin !== 'null' ? location.origin : '*';
+const avisa = (m) => { try { if (parent !== window) parent.postMessage({ rv3d: m }, alvoMsg); } catch (e) { /* sem pai */ } };
+const gl = cvs.getContext('webgl', { alpha: true, antialias: true, premultipliedAlpha: true }) || cvs.getContext('experimental-webgl', { alpha: true });
+if (!gl) { avisa('sem'); return; }
+const Q = new URLSearchParams(location.search);
+const reduz = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- matemática (matrizes 4x4 em colunas, como no WebGL) ---------- */
+const mul = (a, b) => { const o = new Array(16); for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; } return o; };
+function compor(p, rt, s) {           // T * Rx * Ry * Rz * S (ordem XYZ)
+  const a = Math.cos(rt[0]), b = Math.sin(rt[0]), c = Math.cos(rt[1]), d = Math.sin(rt[1]), e = Math.cos(rt[2]), f = Math.sin(rt[2]);
+  const ae = a * e, af = a * f, be = b * e, bf = b * f;
+  return [c * e * s[0], (af + be * d) * s[0], (bf - ae * d) * s[0], 0,
+    -c * f * s[1], (ae - bf * d) * s[1], (be + af * d) * s[1], 0,
+    d * s[2], -b * c * s[2], a * c * s[2], 0, p[0], p[1], p[2], 1];
+}
+function perspectiva(fov, asp, n, f) { const t = 1 / Math.tan(fov / 2); return [t / asp, 0, 0, 0, 0, t, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]; }
+function olharPara(o, t) {
+  let z = [o[0] - t[0], o[1] - t[1], o[2] - t[2]]; let l = Math.hypot(...z); z = z.map((v) => v / l);
+  let x = [z[2], 0, -z[0]]; l = Math.hypot(...x); x = x.map((v) => v / l);               // up = (0,1,0)
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  const dot = (u) => u[0] * o[0] + u[1] * o[1] + u[2] * o[2];
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x), -dot(y), -dot(z), 1];
+}
+function matNormal(m) {               // inversa-transposta 3x3 (sem dividir pelo determinante: a escala é sempre positiva)
+  const a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+  const C = [[e * i - f * h, -(d * i - f * g), d * h - e * g], [-(b * i - c * h), a * i - c * g, -(a * h - b * g)], [b * f - c * e, -(a * f - c * d), a * e - b * d]];
+  return [C[0][0], C[1][0], C[2][0], C[0][1], C[1][1], C[2][1], C[0][2], C[1][2], C[2][2]];
+}
+const ponto = (m, v) => [m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12], m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13], m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14]];
+const cor = (h) => [(h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255];
+const lim = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------- shaders: luz suave de manhã (hemisfério + sol + contraluz + borda), estilo animação ---------- */
+const VS = `attribute vec3 aP;attribute vec3 aN;attribute vec2 aU;uniform mat4 uM,uVP;uniform mat3 uNM;uniform vec2 uRep;
+varying vec3 vN,vW;varying vec2 vU;void main(){vec4 w=uM*vec4(aP,1.);vW=w.xyz;vN=uNM*aN;vU=aU*uRep;gl_Position=uVP*w;}`;
+const FS = `precision mediump float;varying vec3 vN,vW;varying vec2 vU;uniform vec3 uCor,uCam;uniform sampler2D uTex;
+uniform float uUsaTex,uMetal,uBrilho,uSemLuz,uAlfa;
+void main(){vec3 base=uCor;float al=uAlfa;if(uUsaTex>.5){vec4 t=texture2D(uTex,vU);base*=t.rgb;al*=t.a;}
+vec3 c=base;if(uSemLuz<.5){vec3 n=normalize(vN),v=normalize(uCam-vW),L=normalize(vec3(.45,.85,.6)),L2=normalize(vec3(-.7,.35,-.5));
+float dif=max((dot(n,L)+.35)/1.35,0.);vec3 hemi=mix(vec3(.58,.56,.6),vec3(1.,.98,.94),n.y*.5+.5);
+vec3 hh=normalize(L+v);float sp=pow(max(dot(n,hh),0.),mix(10.,80.,uBrilho))*(.06+uMetal*.8+uBrilho*.45);
+float rim=pow(1.-max(dot(n,v),0.),3.);
+c=base*(hemi*.52+vec3(1.,.95,.88)*dif*.68+vec3(.65,.82,1.)*max(dot(n,L2),0.)*.28)+mix(vec3(1.,.97,.9),base*1.6,uMetal)*sp+vec3(.8,.9,1.)*rim*.22;}
+gl_FragColor=vec4(c*al,al);}`;
+function sh(t, s) { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; }
+const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) { avisa('sem'); return; }
+gl.useProgram(prog);
+const A = { p: gl.getAttribLocation(prog, 'aP'), n: gl.getAttribLocation(prog, 'aN'), u: gl.getAttribLocation(prog, 'aU') };
+const U = {}; ['uM', 'uVP', 'uNM', 'uRep', 'uCor', 'uCam', 'uTex', 'uUsaTex', 'uMetal', 'uBrilho', 'uSemLuz', 'uAlfa'].forEach((k) => { U[k] = gl.getUniformLocation(prog, k); });
+gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.clearColor(0, 0, 0, 0);
+
+/* ---------- geometrias ---------- */
+const G = () => ({ p: [], n: [], u: [], i: [] });
+function fim(g) {
+  const b = (d, T) => { const o = gl.createBuffer(); gl.bindBuffer(T === Uint16Array ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER, o); gl.bufferData(T === Uint16Array ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER, new T(d), gl.STATIC_DRAW); return o; };
+  return { bp: b(g.p, Float32Array), bn: b(g.n, Float32Array), bu: b(g.u, Float32Array), bi: b(g.i, Uint16Array), cnt: g.i.length };
+}
+function caixa(w, h, d) {             // caixa de cantos arredondados (como o modelo original: pelúcia sem arestas vivas)
+  const r = Math.min(Math.min(w, h, d) * .3, .16), g = G(), H = [w / 2, h / 2, d / 2], red = r >= .03;
+  const n = red ? Math.min(12, Math.max(4, Math.round(Math.max(w, h, d) / r))) : 1, I = red ? [w / 2 - r, h / 2 - r, d / 2 - r] : H;
+  for (let a = 0; a < 3; a++) for (const s of [-1, 1]) {
+    const b = (a + 1) % 3, c = (a + 2) % 3, base = g.p.length / 3;
+    for (let j = 0; j <= n; j++) for (let k = 0; k <= n; k++) {
+      const v = [0, 0, 0]; v[a] = s * H[a]; v[b] = (k / n * 2 - 1) * H[b]; v[c] = (j / n * 2 - 1) * H[c];
+      let nr = [0, 0, 0]; nr[a] = s;
+      if (red) { const cl = v.map((q, x) => lim(q, -I[x], I[x])), dv = v.map((q, x) => q - cl[x]), L = Math.hypot(...dv); if (L > 1e-6) { nr = dv.map((q) => q / L); for (let x = 0; x < 3; x++) v[x] = cl[x] + nr[x] * r; } }
+      g.p.push(...v); g.n.push(...nr); g.u.push(k / n, j / n);
+    }
+    for (let j = 0; j < n; j++) for (let k = 0; k < n; k++) { const q = base + j * (n + 1) + k; g.i.push(q, q + 1, q + n + 2, q, q + n + 2, q + n + 1); }
+  }
+  return fim(g);
+}
+function esfera(r, ws = 24, hs = 16) {
+  const g = G();
+  for (let i = 0; i <= hs; i++) { const th = i / hs * Math.PI; for (let j = 0; j <= ws; j++) { const ph = j / ws * Math.PI * 2, x = -Math.cos(ph) * Math.sin(th), y = Math.cos(th), z = Math.sin(ph) * Math.sin(th); g.p.push(x * r, y * r, z * r); g.n.push(x, y, z); g.u.push(j / ws, 1 - i / hs); } }
+  for (let i = 0; i < hs; i++) for (let j = 0; j < ws; j++) { const a = i * (ws + 1) + j, b = a + ws + 1; g.i.push(a, b, a + 1, b, b + 1, a + 1); }
+  return fim(g);
+}
+function cilindro(rt, rb, h, seg = 16) {
+  const g = G(), sl = (rb - rt) / h, nl = Math.hypot(1, sl);
+  for (let i = 0; i <= 1; i++) { const y = h / 2 - i * h, r = i ? rb : rt; for (let j = 0; j <= seg; j++) { const a = j / seg * Math.PI * 2, sx = Math.sin(a), cz = Math.cos(a); g.p.push(r * sx, y, r * cz); g.n.push(sx / nl, sl / nl, cz / nl); g.u.push(j / seg, 1 - i); } }
+  for (let j = 0; j < seg; j++) { const a = j, b = j + seg + 1; g.i.push(a, b, a + 1, b, b + 1, a + 1); }
+  for (const [y, r, s] of [[h / 2, rt, 1], [-h / 2, rb, -1]]) {
+    if (r <= 0) continue; const c = g.p.length / 3; g.p.push(0, y, 0); g.n.push(0, s, 0); g.u.push(.5, .5);
+    for (let j = 0; j <= seg; j++) { const a = j / seg * Math.PI * 2; g.p.push(r * Math.sin(a), y, r * Math.cos(a)); g.n.push(0, s, 0); g.u.push(.5 + Math.sin(a) * .5, .5 + Math.cos(a) * .5); }
+    for (let j = 0; j < seg; j++) g.i.push(c, c + 1 + j, c + 2 + j);
+  }
+  return fim(g);
+}
+function toro(R, t, rs = 8, ts = 24) {
+  const g = G();
+  for (let j = 0; j <= rs; j++) for (let i = 0; i <= ts; i++) {
+    const u = i / ts * Math.PI * 2, v = j / rs * Math.PI * 2, cx = R * Math.cos(u), cy = R * Math.sin(u);
+    const x = (R + t * Math.cos(v)) * Math.cos(u), y = (R + t * Math.cos(v)) * Math.sin(u), z = t * Math.sin(v), l = Math.hypot(x - cx, y - cy, z);
+    g.p.push(x, y, z); g.n.push((x - cx) / l, (y - cy) / l, z / l); g.u.push(i / ts, j / rs);
+  }
+  for (let j = 1; j <= rs; j++) for (let i = 1; i <= ts; i++) { const a = (ts + 1) * j + i - 1, b = (ts + 1) * (j - 1) + i - 1, c = (ts + 1) * (j - 1) + i, d = (ts + 1) * j + i; g.i.push(a, b, d, b, c, d); }
+  return fim(g);
+}
+function plano(w, h) { const g = G(); g.p.push(-w / 2, -h / 2, 0, w / 2, -h / 2, 0, w / 2, h / 2, 0, -w / 2, h / 2, 0); g.n.push(0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1); g.u.push(0, 0, 1, 0, 1, 1, 0, 1); g.i.push(0, 1, 2, 0, 2, 3); return fim(g); }
+function tubo(pts, r, rad = 5) {      // fio em espiral (eixo de referência X, o eixo da mola)
+  const g = G(), N = pts.length;
+  for (let k = 0; k < N; k++) {
+    const a = pts[Math.max(0, k - 1)], b = pts[Math.min(N - 1, k + 1)]; let T = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]; let l = Math.hypot(...T); T = T.map((v) => v / l);
+    let Nn = [0, T[2], -T[1]]; l = Math.hypot(...Nn) || 1; Nn = Nn.map((v) => v / l);                   // T x X
+    const B = [T[1] * Nn[2] - T[2] * Nn[1], T[2] * Nn[0] - T[0] * Nn[2], T[0] * Nn[1] - T[1] * Nn[0]];
+    for (let j = 0; j <= rad; j++) { const v = j / rad * Math.PI * 2, c = Math.cos(v), s = Math.sin(v), nx = c * Nn[0] + s * B[0], ny = c * Nn[1] + s * B[1], nz = c * Nn[2] + s * B[2]; g.p.push(pts[k][0] + nx * r, pts[k][1] + ny * r, pts[k][2] + nz * r); g.n.push(nx, ny, nz); g.u.push(k / N, j / rad); }
+  }
+  for (let k = 0; k < N - 1; k++) for (let j = 0; j < rad; j++) { const a = k * (rad + 1) + j, b = a + rad + 1; g.i.push(a, b, a + 1, b, b + 1, a + 1); }
+  return fim(g);
+}
+
+/* ---------- texturas desenhadas em canvas (as mesmas do modelo original) ---------- */
+function cv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+function textura(c, repetir) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  const pot = !(c.width & (c.width - 1)) && !(c.height & (c.height - 1));
+  if (pot && repetir) { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT); gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); }
+  else { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); }
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); return t;
+}
+function trama(base, escuro, step) {  // juta / pano do jaleco
+  const c = cv(256, 256), g = c.getContext('2d'), b = parseInt(base.slice(1), 16), R = b >> 16, Gc = b >> 8 & 255, B = b & 255;
+  g.fillStyle = escuro; g.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 256; y += step) for (let x = 0; x < 256; x += step) {
+    const d = (Math.random() * 44 - 22) | 0, w = ((x + y) / step) & 1; g.fillStyle = `rgb(${R + d},${Gc + d},${B + d})`;
+    if (w) g.fillRect(x + 1, y, step - 2, step); else g.fillRect(x, y + 1, step, step - 2);
+    g.fillStyle = 'rgba(0,0,0,.18)'; if (w) g.fillRect(x + 1, y, 2, step); else g.fillRect(x, y + 1, step, 2);
+  }
+  g.globalAlpha = .35; for (let i = 0; i < 260; i++) { g.strokeStyle = Math.random() < .5 ? '#e6cfa0' : '#3a2614'; g.lineWidth = 1; g.beginPath(); const x = Math.random() * 256, y = Math.random() * 256; g.moveTo(x, y); g.lineTo(x + Math.random() * 14 - 7, y + Math.random() * 14 - 7); g.stroke(); }
+  return textura(c, true);
+}
+const mat = (o) => Object.assign({ cor: [1, 1, 1], tex: null, rep: [1, 1], metal: 0, brilho: 0, semLuz: 0, alfa: 1 }, o);
+const burM = mat({ tex: trama('#b08a58', '#3a2716', 16), rep: [2, 2] });
+const metal = mat({ cor: cor(0xb08a45), metal: 1, brilho: .7 });
+const dark = mat({ cor: cor(0x2a1d14), brilho: .3 });
+const thread = mat({ cor: cor(0x6b4a2a) });
+
+/* ---------- cena (só o personagem) ---------- */
+class No { constructor(g, m) { this.g = g; this.m = m; this.p = [0, 0, 0]; this.r = [0, 0, 0]; this.s = [1, 1, 1]; this.f = []; this.W = null; } add(o) { this.f.push(o); return o; } }
+const cena = new No(), root = cena.add(new No());
+const cacheG = new Map(), geo = (k, f) => { if (!cacheG.has(k)) cacheG.set(k, f()); return cacheG.get(k); };
+const B = (w, h, d) => geo(`b${w},${h},${d}`, () => caixa(w, h, d));
+const S = (r, a = 24, b = 16) => geo(`s${r},${a},${b}`, () => esfera(r, a, b));
+const C = (t, b, h, s = 16) => geo(`c${t},${b},${h},${s}`, () => cilindro(t, b, h, s));
+const Tr = (R, t, a = 8, b = 24) => geo(`t${R},${t},${a},${b}`, () => toro(R, t, a, b));
+function mesh(g, m, x = 0, y = 0, z = 0, pai) { const o = new No(g, m); o.p = [x, y, z]; (pai || root).add(o); return o; }
+function grupo(pai, x = 0, y = 0, z = 0) { const o = new No(); o.p = [x, y, z]; pai.add(o); return o; }
+
+
+/* ---------- materiais do traje de tuno ---------- */
+const velM = mat({ cor: cor(0x1e1b26), brilho: .45 });                 // veludo preto do gibão
+const capaM = mat({ cor: cor(0x141219), brilho: .3 });                 // capa (manteo)
+const golaM = mat({ cor: cor(0xfbf7ee), brilho: .35 });                // golilla franzida
+const becaM = mat({ tex: trama('#f4c51c', '#b98f00', 6), rep: [1, 4], brilho: .55 });   // beca amarela: a cor da Medicina
+const ouro = mat({ cor: cor(0xe0a91c), metal: 1, brilho: .85 });
+const tuboM = mat({ cor: cor(0x2f3742), brilho: .6 });
+function madeiraTex() { const c = cv(256, 256), g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 256, 0); gr.addColorStop(0, '#7a3d12'); gr.addColorStop(.5, '#b8652a'); gr.addColorStop(1, '#7a3d12'); g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
+  g.globalAlpha = .25; for (let i = 0; i < 70; i++) { g.strokeStyle = Math.random() < .5 ? '#4a2208' : '#e0995a'; g.lineWidth = 1 + Math.random() * 2; g.beginPath(); const x = Math.random() * 256; g.moveTo(x, 0); g.bezierCurveTo(x + 12, 80, x - 12, 170, x + 6, 256); g.stroke(); } return textura(c, true); }
+function tampoTex() { const c = cv(256, 256), g = c.getContext('2d');
+  // tampo em forma de pera (fora dela, transparente)
+  g.beginPath(); g.arc(128, 168, 86, 0, 7); g.arc(128, 82, 64, 0, 7); g.fill(); g.globalCompositeOperation = 'source-in';
+  g.fillStyle = '#e9c27f'; g.fillRect(0, 0, 256, 256); g.globalAlpha = .22; for (let x = 0; x < 256; x += 4) { g.strokeStyle = x % 8 ? '#b88a44' : '#fff3d6'; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 256); g.stroke(); }
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over'; g.strokeStyle = '#6b3410'; g.lineWidth = 5; g.beginPath(); g.arc(128, 168, 84, .35, Math.PI - .35); g.stroke(); g.strokeStyle = '#5a2c0c'; g.lineWidth = 10; g.beginPath(); g.arc(128, 150, 44, 0, 7); g.stroke(); g.fillStyle = '#1a0d05'; g.beginPath(); g.arc(128, 150, 32, 0, 7); g.fill(); return textura(c, false); }
+const madeira = mat({ tex: madeiraTex(), brilho: .6 }), tampo = mat({ tex: tampoTex(), brilho: .5 });
+// escudo da beca: bastão de Asclépio sobre fundo dourado
+const ec = cv(128, 128), eg = ec.getContext('2d'); { const r = eg.createRadialGradient(54, 50, 6, 64, 64, 62); r.addColorStop(0, '#fff6c8'); r.addColorStop(.7, '#e8b62a'); r.addColorStop(1, '#a87a08'); eg.fillStyle = r; eg.beginPath(); eg.arc(64, 64, 62, 0, 7); eg.fill();
+  eg.strokeStyle = '#7a1d12'; eg.lineWidth = 7; eg.lineCap = 'round'; eg.beginPath(); eg.moveTo(64, 22); eg.lineTo(64, 108); eg.stroke();
+  eg.strokeStyle = '#1f5130'; eg.lineWidth = 6; eg.beginPath(); for (let y = 30; y <= 100; y += 2) { const x = 64 + Math.sin((y - 30) / 70 * Math.PI * 2.5) * 15; y === 30 ? eg.moveTo(x, y) : eg.lineTo(x, y); } eg.stroke(); eg.fillStyle = '#1f5130'; eg.beginPath(); eg.arc(70, 28, 6, 0, 7); eg.fill(); }
+const escudoM = mat({ tex: textura(ec), brilho: .7 });
+
+/* ---------- corpo: boneco de juta vestido de tuno ---------- */
+const corpo = grupo(root);
+mesh(B(1.1, 1.3, .8), burM, 0, .65, 0, corpo);
+mesh(B(1.18, 1.14, .88), velM, 0, .6, 0, corpo);                                     // gibão
+[.98, .78, .58, .38].forEach((y) => { mesh(S(.045, 10, 8), golaM, 0, y, .45, corpo).s = [1, 1, .5]; });   // botões
+mesh(B(1.2, .12, .9), mat({ cor: cor(0x0d0c10), brilho: .5 }), 0, .1, 0, corpo);     // cinto
+mesh(B(.16, .14, .04), ouro, 0, .1, .46, corpo);                                     // fivela
+// golilla: gola branca franzida
+const gol = grupo(corpo, 0, 1.3, 0);
+mesh(Tr(.5, .1, 8, 30), golaM, 0, 0, 0, gol).r = [Math.PI / 2, 0, 0];
+for (let i = 0; i < 20; i++) { const a = i / 20 * Math.PI * 2; mesh(S(.11, 10, 8), golaM, Math.cos(a) * .55, 0, Math.sin(a) * .5, gol).s = [1, .62, 1]; }
+// beca amarela em diagonal (ombro → quadril), frente e costas, com o escudo
+const becaF = mesh(B(.36, 1.62, .05), becaM, 0, .62, .47, corpo); becaF.r = [0, 0, .72];
+[-1, 1].forEach((s) => mesh(B(.025, 1.6, .055), ouro, s * .18 * Math.cos(.72), .62 + s * .18 * Math.sin(.72), .475, corpo).r = [0, 0, .72]);   // debrum dourado
+const becaC = mesh(B(.3, 1.62, .05), becaM, 0, .62, -.47, corpo); becaC.r = [0, 0, .72];
+mesh(B(.36, .28, .9), becaM, -.5, 1.12, 0, corpo).r = [0, 0, .4];                    // passa sobre o ombro
+const esc = mesh(C(.17, .17, .04, 28), escudoM, -.16, .78, .51, corpo); esc.r = [Math.PI / 2, 0, 0];
+mesh(Tr(.17, .018, 6, 28), ouro, -.16, .78, .53, corpo);
+// estetoscópio em volta do pescoço
+[-1, 1].forEach((s) => { const p = []; for (let k = 0; k <= 24; k++) { const t = k / 24; p.push([s * (.36 - t * .3), 1.18 - t * .42 - Math.sin(t * Math.PI) * .04, .5 + Math.sin(t * Math.PI) * .05]); } mesh(tubo(p, .022, 6), tuboM, 0, 0, 0, corpo); });
+{ const p = []; for (let k = 0; k <= 20; k++) { const t = k / 20; p.push([.06 + t * .26 + Math.sin(t * 3) * .03, .76 - t * .5, .53]); } mesh(tubo(p, .022, 6), tuboM, 0, 0, 0, corpo); }
+mesh(C(.075, .075, .05, 18), mat({ cor: cor(0xc9d2dc), metal: .8, brilho: .9 }), .33, .25, .54, corpo).r = [Math.PI / 2, 0, 0];
+// capa (manteo) nas costas e caindo pelos lados
+const capa = grupo(corpo, 0, 1.25, -.48);
+mesh(B(1.5, 1.55, .05), capaM, 0, -.72, -.02, capa).r = [.07, 0, 0];
+[-1, 1].forEach((s) => { mesh(B(.05, 1.45, .62), capaM, s * .74, -.7, .3, capa).r = [0, 0, s * .05]; });
+// cintas coloridas presas no ombro da capa (lembranças da tuna)
+const cintas = grupo(corpo, -.66, 1.22, .25), CORES = [0xe74c3c, 0x2e86de, 0x27ae60, 0xf1c40f, 0xe84393, 0x8e44ad, 0xf39c12], fitas = [];
+CORES.forEach((h, i) => { const g = grupo(cintas, (i % 4) * .045 - .06, 0, (i / 4 | 0) * .06 - .1 * (i % 2)), L = .7 + ((i * 37) % 5) * .12; mesh(B(.075, L, .015), mat({ cor: cor(h), brilho: .5 }), 0, -L / 2, 0, g); g.r = [0, 0, (i - 3) * .05]; fitas.push(g); });
+mesh(S(.07, 12, 10), ouro, -.66, 1.22, .3, corpo);                                    // broche das cintas
+
+/* ---------- cabeça (a mesma do Epi: juta, olho de vidro, olho de botão, antena) ---------- */
+// cabeça
+const head = grupo(root, 0, 2.2, 0);
+mesh(B(1.6, 1.6, 1.6), burM, 0, 0, 0, head);
+for (let i = 0; i < 13; i++) mesh(B(.34, .05, .04), thread, 0, -.72 + i * .12, .81, head).r = [0, 0, i % 2 ? .6 : -.6];
+mesh(B(.04, 1.5, .02), dark, 0, 0, .805, head);
+// olho de vidro (a íris segue o mouse)
+const ic = cv(128, 128), ig = ic.getContext('2d'); ig.fillStyle = '#f4f6f8'; ig.fillRect(0, 0, 128, 128);
+const gr = ig.createRadialGradient(64, 64, 8, 64, 64, 48); gr.addColorStop(0, '#10202c'); gr.addColorStop(.25, '#2a6a96'); gr.addColorStop(1, '#9fcfe6');
+ig.fillStyle = gr; ig.beginPath(); ig.arc(64, 64, 48, 0, 7); ig.fill(); ig.fillStyle = '#000'; ig.beginPath(); ig.arc(64, 64, 14, 0, 7); ig.fill();
+ig.fillStyle = 'rgba(255,255,255,.9)'; ig.beginPath(); ig.arc(50, 48, 9, 0, 7); ig.fill();
+const olhoG = grupo(head, -.4, .1, .82);
+const olho = mesh(S(.24, 24, 16), mat({ tex: textura(ic), brilho: 1 }), 0, 0, 0, olhoG); olho.s = [.45, 1, 1]; olho.r = [0, -Math.PI / 2, 0];   // a íris (centro da textura) fica de frente
+mesh(Tr(.26, .03, 8, 24), metal, -.4, .1, .8, head);
+const vidro = mesh(S(.255, 24, 16), mat({ cor: [1, 1, 1], alfa: .22, brilho: 1 }), -.4, .1, .83, head); vidro.s = [1, 1, .5]; vidro.transp = true;
+mesh(Tr(.235, .025, 8, 24), mat({ cor: cor(0x3a2b20), metal: .3, brilho: .5 }), .4, .1, .855, head);
+for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2; mesh(C(.006, .012, .1, 4), dark, -.4 + Math.cos(a) * .29, .1 + Math.sin(a) * .29, .8, head).r = [0, 0, a - Math.PI / 2]; }
+// olho de botão
+mesh(C(.24, .24, .07, 24), mat({ cor: cor(0x4a3a2c), metal: .3, brilho: .5 }), .4, .1, .82, head).r = [Math.PI / 2, 0, 0];
+[[-.06, -.06], [.06, -.06], [-.06, .06], [.06, .06]].forEach(([a, b]) => mesh(S(.025, 8, 8), dark, .4 + a, .1 + b, .86, head));
+// antena
+const ant = grupo(head, 0, .75, 0);
+mesh(C(.03, .07, .9, 10), metal, 0, .45, 0, ant);
+mesh(C(.07, .07, .12, 10), metal, 0, .15, 0, ant); mesh(C(.09, .09, .05, 10), metal, 0, .07, 0, ant);
+mesh(S(.06, 12, 12), metal, 0, .93, 0, ant);
+[1, 1.15, 1.3, 1.45].forEach((y) => { mesh(Tr(.082 - (y - .75) / .9 * .04, .012, 6, 14), metal, 0, y - .75, 0, ant).r = [Math.PI / 2, 0, 0]; });
+[-1, 1].forEach((s) => {
+  const pts = []; for (let k = 0; k <= 120; k++) { const t = k / 120, a = t * Math.PI * 14; pts.push([s * (.8 + t * .4), .1 + Math.cos(a) * .08, Math.sin(a) * .08]); }
+  mesh(tubo(pts, .012, 5), metal, 0, 0, 0, head);
+  mesh(C(.1, .1, .02, 16), metal, s * 1.22, .1, 0, head).r = [0, 0, Math.PI / 2];
+});
+// remendo e fiapos
+mesh(geo('pl.5,.6', () => plano(.5, .6)), dark, .805, .3, .1, head).r = [0, Math.PI / 2, 0];
+const fiapo = C(.005, .002, .14, 3), fiapoM = mat({ cor: cor(0xc9a876) });
+for (let i = 0; i < 90; i++) { const a = Math.random() * 4 | 0, u = (Math.random() * 2 - 1) * .8, s = a % 2 ? 1 : -1, q = .8 * (Math.random() < .5 ? 1 : -1), p = a < 2 ? [u, .8 * s, q] : [.8 * s, u, q]; mesh(fiapo, fiapoM, p[0], p[1], p[2], head).r = [Math.random() * 2, 0, Math.random() * 2]; }
+
+// pernas: calções de veludo e meias pretas
+const legs = [-1, 1].map((s) => {
+  const g = grupo(root, s * .33, 0, .05);
+  mesh(B(.5, .95, .55), burM, 0, -.45, 0, g); mesh(S(.36, 20, 14), velM, 0, -.18, 0, g).s = [1, .9, 1];
+  mesh(S(.34, 24, 16), dark, 0, -.95, .08, g).s = [.85, .8, 1.1]; mesh(Tr(.28, .022, 6, 24), thread, 0, -.8, .02, g).r = [Math.PI / 2, 0, 0]; return g;
+});
+// braços com mangas bufantes de veludo
+function braco(s) {
+  const g = grupo(root, s * .78, 1.2, 0);
+  mesh(S(.3, 20, 14), velM, 0, -.08, 0, g).s = [1, .85, 1];
+  mesh(C(.2, .18, .62, 24), velM, 0, -.4, 0, g); mesh(Tr(.19, .03, 6, 24), golaM, 0, -.7, 0, g).r = [Math.PI / 2, 0, 0];
+  mesh(S(.24, 24, 16), burM, 0, -.88, 0, g); mesh(S(.09, 12, 8), burM, s * -.18, -.93, .15, g); return g;
+}
+const armL = braco(-1), armR = braco(1);
+
+/* ---------- bandurria (presa ao corpo; o braço do instrumento sobe para a esquerda) ---------- */
+const bnd = grupo(root, .24, .3, .7); bnd.r = [-.15, 0, 1]; bnd.s = [.84, .84, .84];
+const cx = mesh(S(.4, 28, 20), madeira, 0, 0, 0, bnd); cx.s = [1, .86, .38];
+mesh(S(.3, 24, 18), madeira, 0, .3, 0, bnd).s = [1, .9, .38];
+const tp = mesh(geo('pl.8,.8', () => plano(.8, .8)), tampo, 0, .07, .16, bnd); tp.transp = true;
+mesh(B(.13, .78, .07), madeira, 0, .84, .02, bnd);
+mesh(B(.1, .74, .02), dark, 0, .86, .065, bnd);                                      // escala
+mesh(B(.2, .26, .05), dark, 0, 1.36, 0, bnd).r = [-.25, 0, 0];                        // cabeça do instrumento
+for (let i = 0; i < 6; i++) mesh(S(.03, 8, 6), ouro, (i % 2 ? .12 : -.12), 1.27 + (i >> 1) * .08, 0, bnd);
+mesh(B(.2, .035, .04), dark, 0, -.2, .17, bnd);                                       // cavalete
+const cordas = [];
+for (let i = 0; i < 6; i++) { const c = mesh(C(.0045, .0045, 1.42, 4), mat({ cor: cor(0xf3e6c4), metal: .6, brilho: .9 }), -.04 + i * .016, .55, .09 - (i > 2 ? 0 : 0), bnd); cordas.push(c); }
+// palheta na mão direita
+const palheta = mesh(C(.05, .02, .015, 3), mat({ cor: cor(0xd35400), brilho: .6 }), 0, 0, 0, root);
+
+// sombra de contato suave (não é cenário: só ancora o personagem)
+const shc = cv(128, 128), shg = shc.getContext('2d'), sgr = shg.createRadialGradient(64, 64, 4, 64, 64, 62);
+sgr.addColorStop(0, 'rgba(60,40,10,.36)'); sgr.addColorStop(1, 'rgba(60,40,10,0)'); shg.fillStyle = sgr; shg.fillRect(0, 0, 128, 128);
+const sombra = mesh(geo('pl1,1', () => plano(1, 1)), mat({ tex: textura(shc), semLuz: 1 }), 0, 0, .15, cena); sombra.r = [-Math.PI / 2, 0, 0]; sombra.s = [2.8, 2, 1]; sombra.transp = true;
+/* ---------- desenho ---------- */
+let VP = null, cam = [0, 0, 0], W = 1, H = 1;
+const dpr = Math.min(window.devicePixelRatio || 1, 2);
+function medir() {
+  const w = Math.max(1, Math.round(cvs.clientWidth * dpr)), h = Math.max(1, Math.round(cvs.clientHeight * dpr));
+  if (w !== cvs.width || h !== cvs.height) { cvs.width = w; cvs.height = h; gl.viewport(0, 0, w, h); }
+  W = cvs.clientWidth || 1; H = cvs.clientHeight || 1;
+}
+const zoom = Math.max(.5, Math.min(2, Number(Q.get('z')) || 1));
+function camera(t) {
+  const asp = W / H, fov = 30 * Math.PI / 180, tg = Math.tan(fov / 2);
+  const d = Math.max(5.6 / (2 * tg), 3.6 / (2 * tg * asp)) / zoom;
+  const th = .14 + Math.sin(t * .23) * .04, ph = 1.38, alvo = [-.15, 2.3, 0];
+  cam = [alvo[0] + d * Math.sin(ph) * Math.sin(th), alvo[1] + d * Math.cos(ph), alvo[2] + d * Math.sin(ph) * Math.cos(th)];
+  VP = mul(perspectiva(fov, asp, .1, 100), olharPara(cam, alvo));
+}
+function atualiza(o, PM) { o.W = mul(PM, compor(o.p, o.r, o.s)); for (const f of o.f) atualiza(f, o.W); }
+const opacos = [], transps = [];
+function coletar(o) { if (o.g) (o.transp ? transps : opacos).push(o); for (const f of o.f) coletar(f); }
+function desenhar(o) {
+  const g = o.g, m = o.m;
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.bp); gl.vertexAttribPointer(A.p, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.bn); gl.vertexAttribPointer(A.n, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, g.bu); gl.vertexAttribPointer(A.u, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.bi);
+  gl.uniformMatrix4fv(U.uM, false, o.W); gl.uniformMatrix3fv(U.uNM, false, matNormal(o.W));
+  gl.uniform3fv(U.uCor, m.cor); gl.uniform2fv(U.uRep, m.rep); gl.uniform1f(U.uMetal, m.metal); gl.uniform1f(U.uBrilho, m.brilho); gl.uniform1f(U.uSemLuz, m.semLuz); gl.uniform1f(U.uAlfa, m.alfa);
+  gl.uniform1f(U.uUsaTex, m.tex ? 1 : 0); if (m.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, m.tex); gl.uniform1i(U.uTex, 0); }
+  gl.drawElements(gl.TRIANGLES, g.cnt, gl.UNSIGNED_SHORT, 0);
+}
+[A.p, A.n, A.u].forEach((a) => gl.enableVertexAttribArray(a));
+
+/* ---------- comportamento: segue o mouse + movimentos aleatórios + toca a bandurria ---------- */
+const POSES = { sit: { y: .3, leg: -Math.PI / 2, lx: -.95, lz: .3, rx: -.55, rz: -.62 }, stand: { y: .98, leg: 0, lx: -.95, lz: .3, rx: -.55, rz: -.62 } };
+let pose = Q.get('pose') === 'sit' || !Q.get('pose') ? 'sit' : 'stand', acenoFixo = Q.get('pose') === 'wave', tocando = Q.get('toca') === '1';
+const E = { ...POSES[pose], hx: 0, hy: 0, hz: 0, lean: 0, danca: 0, ant: 0, toca: 0, vento: 0 };
+const mouse = { x: 0, y: 0, t: -99, px: null, py: null, escala: 0 };
+let acao = null, acaoT = 0, acaoDur = 0, proxima = reduz ? 1e9 : 2.5, olhar = [0, 0], proxOlhar = 0, ultimoOi = -99, inclina = 0;
+const ACOES = { acena: 2.6, pulo: .75, danca: 2.6, inclina: 1.9, levanta: 4.5, toca: 3.4, cintas: 1.8, antena: 1.4, olha: 2.2 };
+function sortear(t) { const ks = Object.keys(ACOES); acao = ks[Math.random() * ks.length | 0]; acaoT = 0; acaoDur = ACOES[acao]; inclina = Math.random() < .5 ? -.32 : .32; if (acao === 'olha') olhar = [Math.random() * 1.6 - .8, Math.random() * .6 - .25]; proxima = t + acaoDur + 2 + Math.random() * 4; }
+function mouseLocal(x, y, escala) { mouse.px = x; mouse.py = y; mouse.escala = escala || Math.max(W, H) / 2; mouse.t = performance.now() / 1000; }
+addEventListener('pointermove', (e) => mouseLocal(e.clientX, e.clientY, Math.max(innerWidth, innerHeight) / 2));
+addEventListener('message', (e) => {
+  if (alvoMsg !== '*' && e.origin !== location.origin) return; const d = e.data || {};
+  if (d.rv3dPose) { pose = d.rv3dPose === 'sit' ? 'sit' : 'stand'; acenoFixo = d.rv3dPose === 'wave'; }
+  if (Array.isArray(d.rv3dMouse)) mouseLocal(d.rv3dMouse[0], d.rv3dMouse[1], d.rv3dMouse[2]);
+  if (typeof d.rv3dToca === 'boolean') tocando = d.rv3dToca;
+  if (d.rv3dAct && ACOES[d.rv3dAct] && !reduz) { acao = d.rv3dAct; acaoT = 0; acaoDur = ACOES[acao]; proxima = performance.now() / 1000 - t0 + acaoDur + 3; }
+});
+
+let t0 = performance.now() / 1000, ultimo = t0, primeiro = true;
+function quadro() {
+  requestAnimationFrame(quadro);
+  const agora = performance.now() / 1000, dt = Math.min(agora - ultimo, .05), t = agora - t0; ultimo = agora;
+  medir(); camera(t);
+  const hw = head.W ? ponto(head.W, [0, 0, 0]) : [0, 3, 0], cl = VP ? [VP[0] * hw[0] + VP[4] * hw[1] + VP[8] * hw[2] + VP[12], VP[1] * hw[0] + VP[5] * hw[1] + VP[9] * hw[2] + VP[13], VP[3] * hw[0] + VP[7] * hw[1] + VP[11] * hw[2] + VP[15]] : [0, 0, 1];
+  const hx = (cl[0] / cl[2] * .5 + .5) * W, hy = (1 - (cl[1] / cl[2] * .5 + .5)) * H;
+  const comMouse = mouse.px !== null && agora - mouse.t < 3;
+  if (comMouse) { mouse.x = lim((mouse.px - hx) / mouse.escala, -1.4, 1.4); mouse.y = lim((mouse.py - hy) / mouse.escala, -1.4, 1.4); }
+  if (comMouse && Math.hypot(mouse.x, mouse.y) < .22 && t - ultimoOi > 9 && acao !== 'acena' && !reduz) { acao = 'acena'; acaoT = 0; acaoDur = 2.2; ultimoOi = t; proxima = t + 5; }
+  if (!acao && t > proxima && !tocando) sortear(t);
+  if (acao) { acaoT += dt; if (acaoT > acaoDur) acao = null; }
+  const pr = acao ? acaoT / acaoDur : 0;
+  const poseAlvo = POSES[acao === 'levanta' ? (pose === 'sit' ? 'stand' : 'sit') : pose], k = 1 - Math.pow(.002, dt);
+  for (const a in poseAlvo) E[a] += (poseAlvo[a] - E[a]) * k;
+  if (!comMouse && t > proxOlhar) { olhar = [Math.random() * .9 - .45, Math.random() * .4 - .15]; proxOlhar = t + 1.5 + Math.random() * 2.5; }
+  const gx = comMouse ? mouse.x : (tocando ? -.25 : olhar[0]), gy = comMouse ? mouse.y : (tocando ? .25 : olhar[1]), kh = 1 - Math.pow(comMouse ? .0005 : .03, dt);
+  E.hx += (lim(gx * 1.1, -.62, .62) - E.hx) * kh; E.hy += (lim(gy * .9, -.35, .45) - E.hy) * kh;
+  E.hz += ((acao === 'inclina' ? inclina : tocando ? Math.sin(t * 2.2) * .12 : 0) - E.hz) * (1 - Math.pow(.01, dt));
+  E.lean += (E.hx * .28 - E.lean) * (1 - Math.pow(.05, dt));
+  E.danca += ((acao === 'danca' ? 1 : 0) - E.danca) * (1 - Math.pow(.02, dt));
+  E.toca += ((tocando || acao === 'toca' ? 1 : 0) - E.toca) * (1 - Math.pow(.01, dt));
+  E.vento += ((acao === 'cintas' ? 1 : 0) - E.vento) * (1 - Math.pow(.03, dt));
+  E.ant = Math.max(E.ant * Math.pow(.15, dt), acao === 'antena' ? 1 : 0, comMouse ? Math.min(1, Math.hypot(mouse.x, mouse.y) < .3 ? .5 : 0) : 0);
+  const pulo = acao === 'pulo' ? Math.sin(pr * Math.PI) : 0, achata = acao === 'pulo' ? (pr < .15 ? 1 - Math.sin(pr / .15 * Math.PI) * .08 : 1 + pulo * .05) : 1;
+  const resp = Math.sin(t * 2.1) * .012, flut = reduz ? 0 : Math.sin(t * 1.6) * .03, bal = Math.sin(t * 5.2) * .04 * E.toca;
+  root.p = [0, E.y + pulo * .55 + Math.abs(Math.sin(t * 6.5)) * .1 * E.danca + flut + Math.abs(bal) * .6, 0];
+  root.r = [0, E.lean + Math.sin(t * 3.2) * .18 * E.danca, Math.sin(t * 6.5) * .07 * E.danca + bal];
+  root.s = [1 / Math.sqrt(achata), achata, 1 / Math.sqrt(achata)];
+  corpo.s = [1, 1 + resp, 1];
+  legs.forEach((l, i) => { l.r = [E.leg + (E.leg > -.2 ? Math.sin(t * 6.5 + i * Math.PI) * .25 * E.danca + (i ? Math.max(0, Math.sin(t * 5.2)) * .18 * E.toca : 0) : 0), 0, 0]; });
+  // mão esquerda no braço da bandurria (faz posições quando toca)
+  armL.r = [E.lx + Math.sin(t * 2.6) * .05 * E.toca, 0, E.lz + Math.sin(t * 6.5) * .15 * E.danca];
+  // mão direita: rasgueado / trêmolo
+  const acena = acenoFixo || acao === 'acena', rasg = Math.sin(t * (13 + 4 * E.toca)) * .2 * E.toca;
+  E.rz += ((acena ? 2.5 : poseAlvo.rz + Math.sin(t * 6.5 + 1) * .5 * E.danca) - E.rz) * (1 - Math.pow(.004, dt));
+  armR.r = [E.rx + (acena ? 0 : rasg), 0, E.rz + (acena ? Math.sin(t * 8) * .32 : rasg * .4)];
+  head.r = [E.hy, E.hx * .95, E.hz + Math.sin(t * .9) * .03];
+  head.p = [0, 2.2 + Math.sin(t * 2) * .012, 0];
+  olhoG.r = [E.hy * .35, E.hx * .35, 0];
+  ant.r = [0, 0, Math.sin(t * 3) * .03 + Math.sin(t * 19) * .22 * E.ant + Math.sin(t * 5.2) * .08 * E.toca];
+  // cintas balançam com o corpo, com a música e com o "vento"
+  fitas.forEach((g, i) => { g.r = [Math.sin(t * 2.3 + i) * (.05 + .25 * E.vento) - E.lean * .2, 0, (i - 3) * .05 + Math.sin(t * 3.1 + i * 1.7) * (.06 + .3 * E.vento + .1 * E.toca + .2 * E.danca)]; });
+  capa.r = [Math.sin(t * 1.7) * .03 + E.danca * .08, 0, 0];
+  cordas.forEach((c, i) => { c.s = [1 + Math.abs(Math.sin(t * 60 + i)) * 2.2 * E.toca, 1, 1]; });
+  atualiza(cena, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const mao = ponto(armR.W, [0, -.95, .12]); palheta.p = mao; palheta.r = [Math.PI / 2, 0, t * E.toca];
+  const chao = -.26 * (E.y - .3) / .68; sombra.p = [0, chao + .01, .15]; const sm = 1 - pulo * .35; sombra.s = [2.8 * sm, 2 * sm, 1]; sombra.m.alfa = 1 - pulo * .5;
+  atualiza(cena, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniformMatrix4fv(U.uVP, false, VP); gl.uniform3fv(U.uCam, cam);
+  opacos.length = 0; transps.length = 0; coletar(cena);
+  gl.depthMask(true); opacos.forEach(desenhar);
+  gl.depthMask(false); transps.forEach(desenhar); gl.depthMask(true);
+  if (primeiro) { primeiro = false; avisa('ok'); }
+}
+try { requestAnimationFrame(quadro); } catch (e) { avisa('sem'); }
+cvs.addEventListener('webglcontextlost', (e) => { e.preventDefault(); avisa('sem'); });
+})();
+</script>
+</body>
+</html>
