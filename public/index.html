@@ -2816,40 +2816,9 @@ var UIM=(function(){var q=(location.search.match(/[?&]ui=(simples|avancado|class
 function setUIM(m){try{localStorage.setItem('melodia.ui',m)}catch(e){}persist();setTimeout(function(){location.href=location.pathname},450)}
 var U10={wins:{},z:30,tour:null,cap:null,lastTxt:'',kind:'letra',blob:null,blobName:'',sty:'pop'};
 function h10(t){return esc(String(t==null?'':t))}
-/* ---------- Epi: tuno da estudantina de Medicina (beca, cintas, bandurria e estetoscópio) ---------- */
-function epiSVG(id){var p='ep'+(id||'');return '<svg class="epi" viewBox="0 0 120 160" aria-hidden="true">'+
-'<defs><radialGradient id="'+p+'sk" cx=".4" cy=".35" r=".75"><stop offset="0" stop-color="#FFE0C7"/><stop offset="1" stop-color="#F2B48C"/></radialGradient>'+
-'<linearGradient id="'+p+'cp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B2B33"/><stop offset="1" stop-color="#0E0E12"/></linearGradient>'+
-'<linearGradient id="'+p+'bd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E8A33D"/><stop offset="1" stop-color="#9C5A1C"/></linearGradient>'+
-'<linearGradient id="'+p+'be" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFD54A"/><stop offset="1" stop-color="#E0A800"/></linearGradient></defs>'+
-'<ellipse cx="60" cy="154" rx="30" ry="5" fill="#000" opacity=".18"/>'+
-'<g class="epiBody">'+
-/* capa (beca) e cintas coloridas penduradas no ombro */
-'<path d="M30 74 Q60 62 90 74 L102 146 Q60 156 18 146 Z" fill="url(#'+p+'cp)"/>'+
-'<g class="epiCintas"><rect x="24" y="76" width="4" height="46" rx="2" fill="#E74C3C" transform="rotate(8 26 76)"/><rect x="29" y="76" width="4" height="54" rx="2" fill="#3498DB" transform="rotate(4 31 76)"/><rect x="34" y="76" width="4" height="42" rx="2" fill="#2ECC71"/><rect x="39" y="76" width="4" height="50" rx="2" fill="#F1C40F" transform="rotate(-3 41 76)"/><rect x="44" y="77" width="4" height="38" rx="2" fill="#E84393" transform="rotate(-6 46 77)"/></g>'+
-/* gibão, golilla e faixa amarela de Medicina */
-'<path d="M42 78 Q60 72 78 78 L80 128 Q60 134 40 128 Z" fill="#1C1C22"/>'+
-'<circle cx="60" cy="96" r="1.6" fill="#E8E2D4"/><circle cx="60" cy="106" r="1.6" fill="#E8E2D4"/><circle cx="60" cy="116" r="1.6" fill="#E8E2D4"/>'+
-'<path d="M76 78 L84 82 L50 132 L40 126 Z" fill="url(#'+p+'be)"/><circle cx="64" cy="104" r="4.2" fill="#FFF3C4" stroke="#B88600" stroke-width="1"/><path d="M64 100.5 v7 M61.5 102.5 q2.5 2 5 0 M61.5 105 q2.5 2 5 0" stroke="#B88600" stroke-width=".9" fill="none"/>'+
-'<ellipse cx="60" cy="76" rx="17" ry="5.5" fill="#FBF7EE" stroke="#D9D0BF" stroke-width="1"/><path d="M45 76 q3 3 6 0 q3 3 6 0 q3 3 6 0 q3 3 6 0 q3 3 6 0" stroke="#D9D0BF" stroke-width=".9" fill="none"/>'+
-/* estetoscópio */
-'<path d="M48 80 Q46 96 54 100" stroke="#8A97A6" stroke-width="2" fill="none"/><path d="M72 80 Q74 92 66 98" stroke="#8A97A6" stroke-width="2" fill="none"/><circle cx="54" cy="101" r="3" fill="#B8C4D0" stroke="#6B7785"/>'+
-/* bandurria e braços */
-'<g class="epiBand"><path d="M70 92 L104 60" stroke="#6E3B12" stroke-width="5" stroke-linecap="round"/><rect x="100" y="52" width="9" height="10" rx="2" fill="#5A2E0D" transform="rotate(-42 104 57)"/>'+
-'<path d="M44 112 C40 96 56 86 70 94 C84 102 76 124 60 124 C50 124 46 118 44 112 Z" fill="url(#'+p+'bd)" stroke="#7A4314" stroke-width="1.2"/><circle cx="60" cy="108" r="5" fill="#3B1D07"/><path d="M50 116 L102 61 M52 118 L104 63" stroke="#F6E7C8" stroke-width=".6"/></g>'+
-'<path d="M42 84 Q34 100 46 112" stroke="#1C1C22" stroke-width="9" stroke-linecap="round" fill="none"/><g class="epiMao"><circle cx="48" cy="113" r="5" fill="url(#'+p+'sk)"/></g>'+
-'<path d="M80 84 Q92 82 94 70" stroke="#1C1C22" stroke-width="9" stroke-linecap="round" fill="none"/><circle cx="94" cy="68" r="5" fill="url(#'+p+'sk)"/>'+
-'</g>'+
-/* cabeça */
-'<g class="epiHead"><circle cx="60" cy="42" r="30" fill="url(#'+p+'sk)"/>'+
-'<path d="M31 38 Q34 12 60 12 Q88 12 90 38 Q84 26 72 24 Q66 32 52 28 Q40 30 31 38 Z" fill="#3B2416"/><path d="M58 13 q6 -8 12 -3" stroke="#3B2416" stroke-width="4" fill="none" stroke-linecap="round"/>'+
-'<g class="epiOlhos"><ellipse cx="48" cy="44" rx="7.5" ry="8.5" fill="#fff"/><ellipse cx="72" cy="44" rx="7.5" ry="8.5" fill="#fff"/><circle class="epiPup" cx="49" cy="45" r="4.4" fill="#2C1A10"/><circle class="epiPup" cx="73" cy="45" r="4.4" fill="#2C1A10"/><circle cx="50.5" cy="43" r="1.5" fill="#fff"/><circle cx="74.5" cy="43" r="1.5" fill="#fff"/>'+
-'<g class="epiPalp"><rect x="40" y="35" width="16" height="9" rx="4" fill="#F2B48C"/><rect x="64" y="35" width="16" height="9" rx="4" fill="#F2B48C"/></g></g>'+
-'<path d="M42 33 q6 -4 12 -1 M66 32 q6 -3 12 1" stroke="#3B2416" stroke-width="2.2" fill="none" stroke-linecap="round"/>'+
-'<circle cx="40" cy="55" r="4.5" fill="#FF8A80" opacity=".45"/><circle cx="80" cy="55" r="4.5" fill="#FF8A80" opacity=".45"/>'+
-'<path class="epiBoca" d="M51 57 Q60 65 69 57" stroke="#7A2E1C" stroke-width="2.4" fill="#C0392B" stroke-linecap="round"/></g></svg>'}
+/* ---------- Epi: o boneco de juta do talk vestido de tuno de Medicina (3D em /epi3d.html, imagens /epi*.png) ---------- */
 /* Epi 3D (WebGL, /epi3d.html) com reserva no desenho 2D se o navegador não tiver WebGL */
-function epiAv(id,q){return '<span class="epi3w" data-epi="'+id+'"><iframe class="epi3d" src="/epi3d.html?'+(q||'pose=stand')+'" title="" tabindex="-1" aria-hidden="true" loading="eager"></iframe>'+epiSVG(id)+'</span>'}
+function epiAv(id,q){q=q||'pose=stand';var img=/toca=1/.test(q)?'epi-toca':/wave/.test(q)?'epi-oi':'epi';return '<span class="epi3w" data-epi="'+id+'"><img class="epiImg" src="/'+img+'.png" alt="" aria-hidden="true" draggable="false"/><iframe class="epi3d" src="/epi3d.html?'+q+'" title="" tabindex="-1" aria-hidden="true" loading="eager"></iframe></span>'}
 function epiPost(m,el){(el?[el]:document.querySelectorAll('iframe.epi3d')).forEach(function(f){try{f.contentWindow.postMessage(m,location.origin)}catch(e){}})}
 addEventListener('message',function(e){if(e.origin!==location.origin)return;var d=e.data||{};if(!d.rv3d)return;document.querySelectorAll('iframe.epi3d').forEach(function(f){if(f.contentWindow===e.source){var w=f.parentElement;w.classList.toggle('fb',d.rv3d==='sem');w.classList.toggle('ok3',d.rv3d==='ok')}})});
 (function(){var pend=null;addEventListener('pointermove',function(e){pend=[e.clientX,e.clientY];if(epiPost._r)return;epiPost._r=requestAnimationFrame(function(){epiPost._r=0;var s=Math.max(innerWidth,innerHeight)/2;document.querySelectorAll('iframe.epi3d').forEach(function(f){var r=f.getBoundingClientRect();if(!r.width)return;epiPost({rv3dMouse:[pend[0]-r.left,pend[1]-r.top,s]},f)})})},{passive:true})})();
@@ -2912,7 +2881,9 @@ body.ui-s>header,body.ui-a>header,body.ui-s .app,body.ui-a .app{display:none!imp
 body.ui-a #toast10{bottom:92px}
 #simWork{text-align:center;padding:40px 10px}#simWork .epi{width:140px;height:186px}#simWork .barw{height:10px;background:var(--ln);border-radius:9px;overflow:hidden;max-width:520px;margin:14px auto}#simWork .barw i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--br),#FFC53D);transition:width .3s}
 /* Epi */
-.epi3w{position:relative;display:inline-block}.epi3w iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none;color-scheme:normal}.epi3w .epi{width:100%;height:100%;opacity:0}.epi3w.fb iframe{display:none}.epi3w.fb .epi{opacity:1}
+.epi3w{position:relative;display:inline-block}.epi3w iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none;opacity:0;transition:opacity .4s}.epi3w.ok3 iframe{opacity:1}.epi3w.fb iframe{display:none}
+.epiImg{position:absolute;left:50%;bottom:2%;height:88%;width:auto;max-width:100%;object-fit:contain;transform:translateX(-50%);transition:opacity .4s;filter:drop-shadow(0 6px 8px rgba(0,0,0,.18));user-select:none}.epi3w.ok3 .epiImg{opacity:0}
+.epi3w.pula .epiImg{animation:epiPu .7s cubic-bezier(.3,.6,.4,1)}
 .simHero .epi3w{width:170px;height:230px}#simWork .epi3w{width:190px;height:240px}#hb10 .hh .epi3w{width:64px;height:84px;flex:none}#epiFab .epi3w{width:100%;height:100%}
 .epi{overflow:visible}.epi .epiBody,.epi .epiHead{transform-origin:60px 150px;animation:epiBob 2.6s ease-in-out infinite}.epi .epiHead{animation-delay:-.25s}
 @keyframes epiBob{50%{transform:translateY(-2.5px)}}.epi .epiPalp{transform-origin:0 40px;transform:scaleY(0);animation:epiBl 4.6s infinite}@keyframes epiBl{0%,93%,100%{transform:scaleY(0)}96%{transform:scaleY(1)}}
@@ -2976,7 +2947,7 @@ b.onclick=function(){var L=EPI_TIPS[UIM==='avancado'?'avancado':'simples'];if(t.
 t.innerHTML=h10(L[i])+'<div class="row"><button type="button" data-g>🧭 Guia passo a passo</button><button type="button" data-n>Outra dica</button><button type="button" data-x>Fechar</button></div>';t.classList.add('on');epiHop(b)};
 t.onclick=function(e){if(e.target.closest('[data-g]')){t.classList.remove('on');tourStart()}else if(e.target.closest('[data-n]'))b.onclick();else if(e.target.closest('[data-x]'))t.classList.remove('on')};
 setTimeout(function(){if(!localStorage.getItem('melodia.epi1')){try{localStorage.setItem('melodia.epi1','1')}catch(e){}b.onclick()}},1800)}
-function epiHop(e){if(!e)return;var f=e.querySelector&&e.querySelector('iframe.epi3d');if(f){epiPost({rv3dAct:Math.random()<.5?'pulo':'acena'},f);return}if(!e.classList)return;e.classList.remove('pula');void e.getBBox;e.getBoundingClientRect();e.classList.add('pula');setTimeout(function(){e.classList.remove('pula')},750)}
+function epiHop(e){if(!e)return;var f=e.querySelector&&e.querySelector('iframe.epi3d');if(f){var w=f.parentElement;if(w.classList.contains('ok3'))epiPost({rv3dAct:Math.random()<.5?'pulo':'acena'},f);else{w.classList.remove('pula');void w.offsetWidth;w.classList.add('pula')}return}if(!e.classList)return;e.classList.remove('pula');void e.getBBox;e.getBoundingClientRect();e.classList.add('pula');setTimeout(function(){e.classList.remove('pula')},750)}
 var TOUR={simples:[
 {sel:'#sTxt',t:'Escreva a letra',x:'Escreva a letra da música, um verso por linha. Se preferir, troque para “Ideia” e descreva o tema: a IA escreve a letra.'},
 {sel:'#sAud',t:'Ou solte um áudio de referência',x:'Arraste um áudio para a caixa ou clique aqui. Pode ser você cantando no celular: eu transcrevo melodia, letra, ornamentos e efeitos vocais.'},
@@ -3033,7 +3004,7 @@ var LYR_SYS='Você é letrista. Escreva uma letra de música em português do Br
 /* ---------- criar música (modo simples) ---------- */
 function simShow(id){['simHome','simWork','simEd'].forEach(function(k){var e=$('#'+k);if(e)e.hidden=k!==id});scrollTo(0,0);if(id==='simEd')simEdRender();if(id==='simHome')simPl()}
 async function simCreate(){var txt=$('#sTxt').value.trim(),brief=$('#sBrief').value.trim(),sty=U10.sty;if(!txt&&!U10.blob){msg('Escreva a letra (ou a ideia) ou solte um áudio de referência.');$('#sTxt').focus();return}
-$('#sty').value=sty;if(brief){try{await setBrief(brief)}catch(e){}}var wk=$('#simWork');simShow('simWork');wk.querySelector('.wtx').textContent='Preparando…';wk.querySelector('.barw i').style.width='3%';var ep=wk.querySelector('.epi');ep.classList.add('toca');epiPost({rv3dToca:true},wk.querySelector('iframe.epi3d'));
+$('#sty').value=sty;if(brief){try{await setBrief(brief)}catch(e){}}var wk=$('#simWork');simShow('simWork');wk.querySelector('.wtx').textContent='Preparando…';wk.querySelector('.barw i').style.width='3%';var ep=wk.querySelector('.epi3w')||document.createElement('i');ep.classList.add('toca');epiPost({rv3dToca:true},wk.querySelector('iframe.epi3d'));
 try{if(U10.kind==='ideia'&&txt){wk.querySelector('.wtx').textContent='Escrevendo a letra a partir da ideia…';try{var ly=String(await aiAsk('Tema e ideia: '+txt+'\nEstilo: '+sty+(brief?'\nComo deve soar: '+brief:''),LYR_SYS)).replace(/```[a-z]*|```/g,'').trim();if(ly.length>20){txt=ly;$('#sTxt').value=ly;U10.kind='letra';simKind()}}catch(e){msg('A IA não está disponível para escrever a letra; vou cantar o texto da ideia.')}}
 if(U10.blob){var before=P;await fromBlob(U10.blob,U10.blobName||'Minha música',txt);if(P===before&&curBuf)await runAnalysis();if(P===before||!T('mel').notes.length)throw new Error('não encontrei uma melodia clara no áudio');
 if(txt&&P.lyrics!==txt)postLyrics(txt)}

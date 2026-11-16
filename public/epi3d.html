@@ -11,7 +11,8 @@
      Parâmetros: ?pose=sit|stand|wave &z=1 (zoom) &toca=1. Mensagens: recebe {rv3dPose}, {rv3dMouse:[x,y,escala]},
      {rv3dToca:true|false} (tocar enquanto a música soa) e {rv3dAct:'pulo'|'acena'|'toca'|'danca'};
      envia {rv3d:'ok'} ao desenhar e {rv3d:'sem'} sem WebGL. -->
-<style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}canvas{display:block;width:100%;height:100%}</style>
+<meta name="color-scheme" content="light dark">
+<style>:root{color-scheme:light dark}html,body{margin:0;height:100%;background:transparent!important;overflow:hidden}canvas{display:block;width:100%;height:100%;background:transparent}</style>
 </head>
 <body>
 <canvas id="c" role="img" aria-label="Epi, o tuno de Medicina, de beca amarela e bandurria"></canvas>
@@ -390,7 +391,7 @@ function quadro() {
   capa.r = [Math.sin(t * 1.7) * .03 + E.danca * .08, 0, 0];
   cordas.forEach((c, i) => { c.s = [1 + Math.abs(Math.sin(t * 60 + i)) * 2.2 * E.toca, 1, 1]; });
   atualiza(cena, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-  const mao = ponto(armR.W, [0, -.95, .12]); palheta.p = mao; palheta.r = [Math.PI / 2, 0, t * E.toca];
+  const mao = ponto(armR.W, [0, -.95, .12]); palheta.p = mao; palheta.r = [Math.PI / 2, 0, t * E.toca]; palheta.s = acena ? [0, 0, 0] : [1, 1, 1];
   const chao = -.26 * (E.y - .3) / .68; sombra.p = [0, chao + .01, .15]; const sm = 1 - pulo * .35; sombra.s = [2.8 * sm, 2 * sm, 1]; sombra.m.alfa = 1 - pulo * .5;
   atualiza(cena, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
